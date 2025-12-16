@@ -1,0 +1,12 @@
+[package]
+name = "datafusion-dist"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+datafusion = { workspace = true }
+futures = { workspace = true }
