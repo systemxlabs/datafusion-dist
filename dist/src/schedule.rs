@@ -34,7 +34,7 @@ impl DistSchedule for RoundRobinScheduler {
         let mut assignments = HashMap::new();
         let mut index = 0;
 
-        for (stage_id, plan) in stage_plans.into_iter() {
+        for (stage_id, plan) in stage_plans.iter() {
             let partition_count = plan.output_partitioning().partition_count();
 
             for partition in 0..partition_count {

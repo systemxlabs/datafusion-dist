@@ -137,7 +137,7 @@ impl DistRuntime {
             drop(guard);
 
             let df_stream = plan.execute(task_id.partition as usize, self.ctx.task_ctx())?;
-            Ok(df_stream.map_err(|e| DistError::from(e)).boxed())
+            Ok(df_stream.map_err(DistError::from).boxed())
         } else {
             self.network.execute_task(node_id, task_id).await
         }

@@ -1,6 +1,7 @@
 pub mod cluster;
 mod error;
 pub mod network;
+pub mod physical_plan;
 pub mod planner;
 pub mod runtime;
 pub mod schedule;

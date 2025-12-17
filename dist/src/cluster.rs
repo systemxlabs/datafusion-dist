@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +19,12 @@ pub trait DistCluster: Debug + Send + Sync {
 pub struct NodeId {
     pub host: String,
     pub port: u16,
+}
+
+impl Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
