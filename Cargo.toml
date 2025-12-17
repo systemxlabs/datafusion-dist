@@ -1,7 +1,8 @@
 [workspace]
 members = [
   "dist",
-  "metas/memory",
+  "clusters/memory",
+  "clusters/postgres",
   "networks/tonic",
 ]
 resolver = "3"
@@ -17,3 +18,5 @@ repository = "https://github.com/systemxlabs/datafusion-dist"
 async-trait = "0.1"
 datafusion = "50"
 futures = "0.3"
+serde = "1.0"
+sysinfo = "0.37"

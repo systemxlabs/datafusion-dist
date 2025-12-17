@@ -1,5 +1,5 @@
 [package]
-name = "datafusion-dist-meta-memory"
+name = "datafusion-dist-cluster-postgres"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
