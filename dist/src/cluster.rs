@@ -2,11 +2,13 @@ use std::{collections::HashMap, fmt::Debug};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DistResult;
+use crate::DistResult;
 
 #[async_trait::async_trait]
 pub trait DistCluster: Debug + Send + Sync {
+    // Send heartbeat
     async fn heartbeat(&self, state: NodeState) -> DistResult<()>;
+    // Get alive nodes
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>>;
 }
 

@@ -1,11 +1,15 @@
 pub mod cluster;
-pub mod error;
+mod error;
 pub mod network;
+pub mod planner;
+pub mod runtime;
 pub mod schedule;
+
+use std::pin::Pin;
+
+pub use error::{DistError, DistResult};
 
 use datafusion::arrow::array::RecordBatch;
 use futures::Stream;
 
-use crate::error::DistResult;
-
-pub type RecordBatchStream = Box<dyn Stream<Item = DistResult<RecordBatch>> + Send + Sync>;
+pub type RecordBatchStream = Pin<Box<dyn Stream<Item = DistResult<RecordBatch>> + Send>>;
