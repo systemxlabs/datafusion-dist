@@ -1001,6 +1001,7 @@ dependencies = [
  "datafusion",
  "datafusion-dist",
  "datafusion-proto",
+ "futures",
  "prost",
  "tonic",
  "uuid",

@@ -4,6 +4,7 @@ package network_tonic;
 
 service DistTonicService {
    rpc SendTasks (SendTasksReq) returns (SendTasksResp) {} 
+   rpc ExecuteTask (TaskId) returns (stream RecordBatch) {}
 }
 
 message SendTasksReq {
@@ -27,4 +28,8 @@ message TaskId {
 message StagePlan {
   StageId stage_id = 1;
   bytes plan = 2;
+}
+
+message RecordBatch {
+  bytes data = 1;
 }

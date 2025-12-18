@@ -31,6 +31,11 @@ pub struct StagePlan {
     #[prost(bytes = "vec", tag = "2")]
     pub plan: ::prost::alloc::vec::Vec<u8>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RecordBatch {
+    #[prost(bytes = "vec", tag = "1")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
 /// Generated client implementations.
 pub mod dist_tonic_service_client {
     #![allow(
@@ -138,6 +143,26 @@ pub mod dist_tonic_service_client {
             ));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn execute_task(
+            &mut self,
+            request: impl tonic::IntoRequest<super::TaskId>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::RecordBatch>>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path =
+                http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/ExecuteTask");
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "network_tonic.DistTonicService",
+                "ExecuteTask",
+            ));
+            self.inner.server_streaming(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -157,6 +182,15 @@ pub mod dist_tonic_service_server {
             &self,
             request: tonic::Request<super::SendTasksReq>,
         ) -> std::result::Result<tonic::Response<super::SendTasksResp>, tonic::Status>;
+        /// Server streaming response type for the ExecuteTask method.
+        type ExecuteTaskStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::RecordBatch, tonic::Status>,
+            > + std::marker::Send
+            + 'static;
+        async fn execute_task(
+            &self,
+            request: tonic::Request<super::TaskId>,
+        ) -> std::result::Result<tonic::Response<Self::ExecuteTaskStream>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct DistTonicServiceServer<T> {
@@ -266,6 +300,46 @@ pub mod dist_tonic_service_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/network_tonic.DistTonicService/ExecuteTask" => {
+                    #[allow(non_camel_case_types)]
+                    struct ExecuteTaskSvc<T: DistTonicService>(pub Arc<T>);
+                    impl<T: DistTonicService> tonic::server::ServerStreamingService<super::TaskId>
+                        for ExecuteTaskSvc<T>
+                    {
+                        type Response = super::RecordBatch;
+                        type ResponseStream = T::ExecuteTaskStream;
+                        type Future =
+                            BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
+                        fn call(&mut self, request: tonic::Request<super::TaskId>) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DistTonicService>::execute_task(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ExecuteTaskSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

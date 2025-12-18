@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::{
+    arrow::{self, array::RecordBatch, error::ArrowError, ipc::reader::StreamReader},
+    physical_plan::ExecutionPlan,
+};
 use datafusion_dist::{
     DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
@@ -11,7 +14,11 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use tonic::transport::Endpoint;
+use futures::StreamExt;
+use tonic::{
+    Status,
+    transport::{Channel, Endpoint},
+};
 
 use crate::protobuf::{
     self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient,
@@ -71,12 +78,7 @@ impl DistNetwork for DistTonicNetwork {
     }
 
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        let addr = format!("http://{}:{}", node_id.host, node_id.port);
-        let endpoint = Endpoint::from_shared(addr).map_err(|e| DistError::network(Box::new(e)))?;
-        let channel = endpoint
-            .connect()
-            .await
-            .map_err(|e| DistError::network(Box::new(e)))?;
+        let channel = build_tonic_channel(node_id).await?;
         let mut tonic_client =
             DistTonicServiceClient::new(channel).max_encoding_message_size(usize::MAX);
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
@@ -89,11 +91,28 @@ impl DistNetwork for DistTonicNetwork {
 
     async fn execute_task(
         &self,
-        _node_id: NodeId,
-        _task_id: TaskId,
+        node_id: NodeId,
+        task_id: TaskId,
     ) -> DistResult<RecordBatchStream> {
-        todo!()
+        let channel = build_tonic_channel(node_id).await?;
+        let mut tonic_client =
+            DistTonicServiceClient::new(channel).max_decoding_message_size(usize::MAX);
+        let stream = tonic_client
+            .execute_task(serialize_task_id(task_id))
+            .await
+            .map_err(|e| DistError::network(Box::new(e)))?;
+        Ok(stream.into_inner().map(parse_record_batch_res).boxed())
     }
+}
+
+async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {
+    let addr = format!("http://{}:{}", node_id.host, node_id.port);
+    let endpoint = Endpoint::from_shared(addr).map_err(|e| DistError::network(Box::new(e)))?;
+    let channel = endpoint
+        .connect()
+        .await
+        .map_err(|e| DistError::network(Box::new(e)))?;
+    Ok(channel)
 }
 
 fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
@@ -109,4 +128,17 @@ fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
         stage: task_id.stage,
         partition: task_id.partition,
     }
+}
+
+fn parse_record_batch_res(
+    proto_res: Result<protobuf::RecordBatch, Status>,
+) -> DistResult<RecordBatch> {
+    let proto_batch = proto_res.map_err(|e| DistError::network(Box::new(e)))?;
+    let reader = StreamReader::try_new(proto_batch.data.as_slice(), None)?;
+    let batches = reader.into_iter().collect::<Result<Vec<_>, ArrowError>>()?;
+    let first_batch = batches
+        .first()
+        .ok_or_else(|| DistError::internal("No batch found in stream reader"))?;
+    let batch = arrow::compute::concat_batches(first_batch.schema_ref(), &batches)?;
+    Ok(batch)
 }

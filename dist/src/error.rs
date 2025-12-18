@@ -1,12 +1,13 @@
 use std::{error::Error, fmt::Display, panic::Location};
 
-use datafusion::error::DataFusionError;
+use datafusion::{arrow::error::ArrowError, error::DataFusionError};
 use tokio::task::JoinError;
 
 pub type DistResult<T> = Result<T, DistError>;
 
 #[derive(Debug)]
 pub enum DistError {
+    Arrow(ArrowError, &'static Location<'static>),
     DataFusion(DataFusionError, &'static Location<'static>),
     Tokio(JoinError, &'static Location<'static>),
     Network(Box<dyn Error + Send + Sync>, &'static Location<'static>),
@@ -35,12 +36,13 @@ impl DistError {
 impl Display for DistError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DistError::DataFusion(err, _) => write!(f, "DataFusion error: {}", err),
-            DistError::Tokio(err, _) => write!(f, "Tokio error: {}", err),
-            DistError::Network(err, _) => write!(f, "Network error: {}", err),
-            DistError::Plan(msg, _) => write!(f, "Plan error: {}", msg),
-            DistError::Schedule(msg, _) => write!(f, "Schedule error: {}", msg),
-            DistError::Internal(msg, _) => write!(f, "Internal error: {}", msg),
+            DistError::Arrow(err, loc) => write!(f, "Arrow error: {err} at {loc}"),
+            DistError::DataFusion(err, loc) => write!(f, "DataFusion error: {err} at {loc}"),
+            DistError::Tokio(err, loc) => write!(f, "Tokio error: {err} at {loc}"),
+            DistError::Network(err, loc) => write!(f, "Network error: {err} at {loc}"),
+            DistError::Plan(msg, loc) => write!(f, "Plan error: {msg} at {loc}"),
+            DistError::Schedule(msg, loc) => write!(f, "Schedule error: {msg} at {loc}"),
+            DistError::Internal(msg, loc) => write!(f, "Internal error: {msg} at {loc}"),
         }
     }
 }
@@ -48,6 +50,7 @@ impl Display for DistError {
 impl Error for DistError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            DistError::Arrow(err, _) => Some(err),
             DistError::DataFusion(err, _) => Some(err),
             DistError::Tokio(err, _) => Some(err),
             DistError::Network(err, _) => Some(err.as_ref()),
@@ -55,6 +58,13 @@ impl Error for DistError {
             DistError::Schedule(_, _) => None,
             DistError::Internal(_, _) => None,
         }
+    }
+}
+
+impl From<ArrowError> for DistError {
+    #[track_caller]
+    fn from(value: ArrowError) -> Self {
+        DistError::Arrow(value, Location::caller())
     }
 }
 

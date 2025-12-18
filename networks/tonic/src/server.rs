@@ -1,6 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
-use datafusion::{physical_plan::ExecutionPlan, prelude::SessionContext};
+use datafusion::{
+    arrow::{array::RecordBatch, ipc::writer::StreamWriter},
+    physical_plan::ExecutionPlan,
+    prelude::SessionContext,
+};
 use datafusion_dist::{
     DistResult,
     network::{ScheduledTasks, StageId, TaskId},
@@ -10,6 +14,7 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
+use futures::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -48,8 +53,12 @@ impl DistTonicServer {
     }
 }
 
+type BoxedDistStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
+
 #[async_trait::async_trait]
 impl DistTonicService for DistTonicServer {
+    type ExecuteTaskStream = BoxedDistStream<protobuf::RecordBatch>;
+
     async fn send_tasks(
         &self,
         request: Request<SendTasksReq>,
@@ -59,6 +68,19 @@ impl DistTonicService for DistTonicServer {
             .map_err(|e| Status::internal(format!("Failed to parse SendTasksReq: {e}")))?;
         self.runtime.receive_tasks(scheduled_tasks).await;
         Ok(Response::new(SendTasksResp {}))
+    }
+
+    async fn execute_task(
+        &self,
+        request: Request<protobuf::TaskId>,
+    ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
+        let task_id = parse_task_id(request.into_inner());
+        let stream = self.runtime.execute_local(task_id).await.map_err(|e| {
+            Status::internal(format!("Failed to execute local task {task_id}: {e}"))
+        })?;
+        Ok(Response::new(
+            stream.map(serialize_record_batch_result).boxed(),
+        ))
     }
 }
 
@@ -79,4 +101,22 @@ fn parse_task_id(proto: protobuf::TaskId) -> TaskId {
         stage: proto.stage,
         partition: proto.partition,
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn serialize_record_batch_result(
+    batch_res: DistResult<RecordBatch>,
+) -> Result<protobuf::RecordBatch, Status> {
+    let batch = batch_res.map_err(|e| Status::from_error(Box::new(e)))?;
+
+    let mut data = vec![];
+    let mut writer = StreamWriter::try_new(&mut data, batch.schema_ref())
+        .map_err(|e| Status::internal(format!("Failed to build stream writer: {e}")))?;
+    writer.write(&batch).map_err(|e| {
+        Status::internal(format!("Failed to write batch through stream writer: {e}"))
+    })?;
+    writer
+        .finish()
+        .map_err(|e| Status::internal(format!("Failed to finish stream writer: {e}")))?;
+    Ok(protobuf::RecordBatch { data })
 }
