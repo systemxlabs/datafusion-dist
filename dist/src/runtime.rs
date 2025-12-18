@@ -3,7 +3,11 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::{physical_plan::ExecutionPlan, prelude::SessionContext};
+use datafusion::{
+    common::tree_node::{Transformed, TreeNode},
+    physical_plan::ExecutionPlan,
+    prelude::SessionContext,
+};
 use futures::{StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -12,6 +16,7 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
     network::{DistNetwork, StageId, TaskId},
+    physical_plan::{ProxyExec, UnresolvedExec},
     planner::{DefaultPlanner, DistPlanner},
     schedule::{DistSchedule, RoundRobinScheduler},
 };
@@ -33,7 +38,7 @@ impl DistRuntime {
         network: Arc<dyn DistNetwork>,
     ) -> DistResult<Self> {
         Ok(Self {
-            node_id: network.local_node()?,
+            node_id: network.local_node(),
             ctx,
             cluster,
             network,
@@ -54,7 +59,7 @@ impl DistRuntime {
     pub async fn submit(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-    ) -> DistResult<HashMap<TaskId, NodeId>> {
+    ) -> DistResult<(Uuid, HashMap<TaskId, NodeId>)> {
         let job_id = Uuid::new_v4();
         let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
 
@@ -64,7 +69,8 @@ impl DistRuntime {
 
         // Resolve stage plans based on task distribution
         for (_, stage_plan) in stage_plans.iter_mut() {
-            *stage_plan = resolve_stage_plan(stage_plan, &task_distribution)?;
+            *stage_plan =
+                resolve_stage_plan(stage_plan.clone(), &task_distribution, &self.network)?;
         }
 
         let mut node_stages = HashMap::new();
@@ -118,35 +124,59 @@ impl DistRuntime {
             .filter(|(task_id, _)| task_id.stage_id() == stage0_id)
             .map(|(task_id, node_id)| (*task_id, node_id.clone()))
             .collect();
-        Ok(stage0_task_distribution)
+        Ok((job_id, stage0_task_distribution))
     }
 
-    pub async fn execute_task(
+    pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
+        let stage_id = task_id.stage_id();
+
+        let guard = self.stage_plans.lock().await;
+        let plan = guard
+            .get(&stage_id)
+            .ok_or_else(|| DistError::internal(format!("Plan not found for stage {stage_id}")))?
+            .clone();
+        drop(guard);
+
+        let df_stream = plan.execute(task_id.partition as usize, self.ctx.task_ctx())?;
+        Ok(df_stream.map_err(DistError::from).boxed())
+    }
+
+    pub async fn execute_remote(
         &self,
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<RecordBatchStream> {
-        if node_id == self.network.local_node()? {
-            let stage_id = task_id.stage_id();
-
-            let guard = self.stage_plans.lock().await;
-            let plan = guard
-                .get(&stage_id)
-                .ok_or_else(|| DistError::internal(format!("Plan not found for stage {stage_id}")))?
-                .clone();
-            drop(guard);
-
-            let df_stream = plan.execute(task_id.partition as usize, self.ctx.task_ctx())?;
-            Ok(df_stream.map_err(DistError::from).boxed())
-        } else {
-            self.network.execute_task(node_id, task_id).await
+        if node_id == self.node_id {
+            return Err(DistError::internal(format!(
+                "remote node id {node_id} is actually self"
+            )));
         }
+        self.network.execute_task(node_id, task_id).await
+    }
+
+    pub async fn receive_plans(
+        &self,
+        stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
+    ) -> DistResult<()> {
+        let mut guard = self.stage_plans.lock().await;
+        guard.extend(stage_plans);
+        Ok(())
     }
 }
 
 fn resolve_stage_plan(
-    _stage_plan: &Arc<dyn ExecutionPlan>,
-    _task_distribution: &HashMap<TaskId, NodeId>,
+    stage_plan: Arc<dyn ExecutionPlan>,
+    task_distribution: &HashMap<TaskId, NodeId>,
+    network: &Arc<dyn DistNetwork>,
 ) -> DistResult<Arc<dyn ExecutionPlan>> {
-    todo!()
+    let transformed = stage_plan.transform(|node| {
+        if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
+            let proxy =
+                ProxyExec::try_from_unresolved(unresolved, network.clone(), task_distribution)?;
+            Ok(Transformed::yes(Arc::new(proxy)))
+        } else {
+            Ok(Transformed::no(node))
+        }
+    })?;
+    Ok(transformed.data)
 }

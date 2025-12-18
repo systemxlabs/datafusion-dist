@@ -1,14 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use datafusion::{
+    arrow::datatypes::SchemaRef,
     common::Statistics,
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{
         DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-        execution_plan::CardinalityEffect,
+        execution_plan::CardinalityEffect, stream::RecordBatchStreamAdapter,
     },
 };
+use futures::TryStreamExt;
 
 use crate::{
     DistError, DistResult,
@@ -84,10 +86,36 @@ impl ExecutionPlan for ProxyExec {
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
-        todo!()
+        let local_node = self.network.local_node();
+        let task_id = self.delegated_stage_id.task_id(partition as u32);
+        let node_id = self
+            .delegated_task_distribution
+            .get(&task_id)
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Not found node id for task id {task_id} in task distribution: {:?}",
+                    self.delegated_task_distribution
+                ))
+            })?;
+
+        if node_id == &local_node {
+            self.delegated_plan.execute(partition, context)
+        } else {
+            let fut = get_df_batch_stream(
+                self.network.clone(),
+                node_id.clone(),
+                task_id,
+                self.delegated_plan.schema(),
+            );
+            let stream = futures::stream::once(fut).try_flatten();
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.delegated_plan.schema(),
+                stream,
+            )))
+        }
     }
 
     fn partition_statistics(
@@ -116,4 +144,17 @@ impl DisplayAs for ProxyExec {
             self.stage_id.stage, self.delegated_stage_id.stage, task_distribution_display
         )
     }
+}
+
+async fn get_df_batch_stream(
+    network: Arc<dyn DistNetwork>,
+    node_id: NodeId,
+    task_id: TaskId,
+    schema: SchemaRef,
+) -> Result<SendableRecordBatchStream, DataFusionError> {
+    let stream = network
+        .execute_task(node_id, task_id)
+        .await?
+        .map_err(DataFusionError::from);
+    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
 }

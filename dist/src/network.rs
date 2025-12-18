@@ -12,7 +12,7 @@ use crate::{DistResult, RecordBatchStream, cluster::NodeId};
 
 #[async_trait::async_trait]
 pub trait DistNetwork: Debug + Send + Sync {
-    fn local_node(&self) -> DistResult<NodeId>;
+    fn local_node(&self) -> NodeId;
 
     // Send task plan
     async fn send_plans(
