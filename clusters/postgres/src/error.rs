@@ -12,9 +12,6 @@ pub enum PostgresClusterError {
 
     #[error("Cluster query error: {0}")]
     Query(String),
-
-    #[error("Node registration error: {0}")]
-    NodeRegistration(String),
 }
 
 impl From<PostgresClusterError> for DistError {

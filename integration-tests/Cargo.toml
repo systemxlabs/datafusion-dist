@@ -1,0 +1,15 @@
+[package]
+name = "datafusion-dist-integration-tests"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+datafusion-dist = { workspace = true }
+datafusion-dist-cluster-postgres = { workspace = true }
+datafusion-dist-network-tonic = { workspace = true }
+
+tokio = { workspace = true, features = ["full"]}

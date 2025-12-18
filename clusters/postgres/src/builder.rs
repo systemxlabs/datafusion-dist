@@ -3,7 +3,7 @@ use std::time::Duration;
 use bb8::Pool;
 use bb8_postgres::PostgresConnectionManager;
 use bb8_postgres::tokio_postgres::NoTls;
-use datafusion_dist::{DistError, cluster::NodeId};
+use datafusion_dist::DistError;
 
 use crate::{PostgresCluster, PostgresClusterError};
 
@@ -13,7 +13,6 @@ pub struct PostgresClusterBuilder {
     user: String,
     password: String,
     dbname: Option<String>,
-    node_id: Option<NodeId>,
     pool_max_size: u32,
     pool_min_idle: Option<u32>,
     pool_idle_timeout: Option<Duration>,
@@ -25,7 +24,6 @@ impl PostgresClusterBuilder {
         port: u16,
         user: impl Into<String>,
         password: impl Into<String>,
-        node_id: NodeId,
     ) -> Self {
         Self {
             host: host.into(),
@@ -33,7 +31,6 @@ impl PostgresClusterBuilder {
             user: user.into(),
             password: password.into(),
             dbname: None,
-            node_id: Some(node_id),
             pool_max_size: 100,
             pool_min_idle: Some(5),
             pool_idle_timeout: Some(Duration::from_secs(60)),
@@ -79,13 +76,7 @@ impl PostgresClusterBuilder {
             .await
             .map_err(|e| DistError::cluster(Box::new(PostgresClusterError::Connection(e))))?;
 
-        let node_id = self.node_id.ok_or_else(|| {
-            DistError::cluster(Box::new(PostgresClusterError::NodeRegistration(
-                "NodeId is required".to_string(),
-            )))
-        })?;
-
-        let cluster = PostgresCluster::new(node_id, pool);
+        let cluster = PostgresCluster::new(pool);
 
         cluster.ensure_schema().await?;
 

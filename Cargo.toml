@@ -3,6 +3,8 @@ members = [
   "dist",
   "clusters/memory",
   "clusters/postgres",
+  "integration-tests",
+  "integration-tests/app",
   "networks/tonic",
   "networks/tonic/gen",
 ]
@@ -20,6 +22,7 @@ datafusion-dist = { path = "dist", version = "0.1.0" }
 datafusion-dist-cluster-postgres = { path = "clusters/postgres", version = "0.1.0" }
 datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.1.0" }
 
+arrow-flight = "56"
 async-trait = "0.1"
 datafusion = "50"
 datafusion-proto = "50"
@@ -31,5 +34,5 @@ tonic-build = "0.13"
 serde = "1.0"
 sysinfo = "0.37"
 tokio = "1"
-uuid = { version = "1.18" }
-log = "0.4.29"
+uuid = "1.18"
+log = "0.4"

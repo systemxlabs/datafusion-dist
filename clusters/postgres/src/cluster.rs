@@ -13,15 +13,13 @@ use crate::PostgresClusterError;
 
 #[derive(Debug, Clone)]
 pub struct PostgresCluster {
-    id: NodeId,
     pool: Pool<PostgresConnectionManager<NoTls>>,
     heartbeat_timeout_seconds: i32,
 }
 
 impl PostgresCluster {
-    pub fn new(id: NodeId, pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
+    pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
         Self {
-            id,
             pool,
             heartbeat_timeout_seconds: 60,
         }
@@ -39,7 +37,6 @@ impl PostgresCluster {
             .execute(
                 r#"
                      CREATE TABLE IF NOT EXISTS cluster_nodes (
-                         node_id TEXT PRIMARY KEY,
                          host TEXT NOT NULL,
                          port INTEGER NOT NULL,
                          total_memory BIGINT,
@@ -49,8 +46,6 @@ impl PostgresCluster {
                          global_cpu_usage REAL,
                          num_running_tasks INTEGER,
                          last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
-                         created_at TIMESTAMPTZ DEFAULT NOW(),
-                         updated_at TIMESTAMPTZ DEFAULT NOW()
                      )
                      "#,
                 &[],
@@ -84,7 +79,6 @@ impl DistCluster for PostgresCluster {
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
                        num_running_tasks = EXCLUDED.num_running_tasks,
                        last_heartbeat = NOW(),
-                       updated_at = NOW()
                    "#;
 
         client

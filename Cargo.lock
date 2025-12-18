@@ -200,6 +200,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-flight"
+version = "56.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c8b0ba0784d56bc6266b79f5de7a24b47024e7b3a0045d2ad4df3d9b686099f"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-ipc",
+ "arrow-schema",
+ "base64",
+ "bytes",
+ "futures",
+ "prost",
+ "prost-types",
+ "tonic",
+]
+
+[[package]]
 name = "arrow-ipc"
 version = "56.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,6 +1050,33 @@ dependencies = [
  "sysinfo",
  "thiserror",
  "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
+name = "datafusion-dist-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "datafusion-dist",
+ "datafusion-dist-cluster-postgres",
+ "datafusion-dist-network-tonic",
+ "tokio",
+]
+
+[[package]]
+name = "datafusion-dist-integration-tests-app"
+version = "0.1.0"
+dependencies = [
+ "arrow-flight",
+ "datafusion",
+ "datafusion-dist",
+ "datafusion-dist-cluster-postgres",
+ "datafusion-dist-network-tonic",
+ "datafusion-proto",
+ "futures",
+ "prost",
+ "tokio",
+ "tonic",
  "uuid",
 ]
 
@@ -3077,6 +3123,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7664a098b8e616bdfcc2dc0e9ac44eb231eedf41db4e9fe95d8d32ec728dedad"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3346,6 +3401,7 @@ dependencies = [
  "mio",
  "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2 0.6.1",
  "tokio-macros",
  "windows-sys 0.61.2",
