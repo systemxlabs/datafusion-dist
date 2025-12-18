@@ -14,6 +14,7 @@ pub enum DistError {
     Plan(String, &'static Location<'static>),
     Schedule(String, &'static Location<'static>),
     Internal(String, &'static Location<'static>),
+    Cluster(Box<dyn Error + Send + Sync>, &'static Location<'static>),
 }
 
 impl DistError {
@@ -31,6 +32,11 @@ impl DistError {
     pub fn internal(msg: impl Into<String>) -> Self {
         DistError::Internal(msg.into(), Location::caller())
     }
+
+    #[track_caller]
+    pub fn cluster(err: Box<dyn Error + Send + Sync>) -> Self {
+        DistError::Cluster(err, Location::caller())
+    }
 }
 
 impl Display for DistError {
@@ -43,6 +49,7 @@ impl Display for DistError {
             DistError::Plan(msg, loc) => write!(f, "Plan error: {msg} at {loc}"),
             DistError::Schedule(msg, loc) => write!(f, "Schedule error: {msg} at {loc}"),
             DistError::Internal(msg, loc) => write!(f, "Internal error: {msg} at {loc}"),
+            DistError::Cluster(err, _) => write!(f, "Cluster error: {}", err),
         }
     }
 }
@@ -57,6 +64,7 @@ impl Error for DistError {
             DistError::Plan(_, _) => None,
             DistError::Schedule(_, _) => None,
             DistError::Internal(_, _) => None,
+            DistError::Cluster(err, _) => Some(err.as_ref()),
         }
     }
 }
