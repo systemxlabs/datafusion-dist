@@ -5,3 +5,18 @@ edition.workspace = true
 homepage.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+sysinfo.workspace = true
+uuid.workspace = true
+log.workspace = true
+bb8 = "0.9"
+bb8-postgres = "0.9"
+datafusion-dist.workspace = true
+thiserror = "2.0.17"
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+serde.workspace = true
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde", "std"] }

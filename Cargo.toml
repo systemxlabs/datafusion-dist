@@ -32,3 +32,4 @@ serde = "1.0"
 sysinfo = "0.37"
 tokio = "1"
 uuid = { version = "1.18" }
+log = "0.4.29"
