@@ -14,19 +14,13 @@ use crate::network::StageId;
 
 #[derive(Debug)]
 pub struct UnresolvedExec {
-    pub stage_id: StageId,
     pub delegated_stage_id: StageId,
     pub delegated_plan: Arc<dyn ExecutionPlan>,
 }
 
 impl UnresolvedExec {
-    pub fn new(
-        stage_id: StageId,
-        delegated_stage_id: StageId,
-        delegated_plan: Arc<dyn ExecutionPlan>,
-    ) -> Self {
+    pub fn new(delegated_stage_id: StageId, delegated_plan: Arc<dyn ExecutionPlan>) -> Self {
         Self {
-            stage_id,
             delegated_stage_id,
             delegated_plan,
         }
@@ -85,8 +79,8 @@ impl DisplayAs for UnresolvedExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "UnresolvedExec: stage={}, delegated_stage={}",
-            self.stage_id.stage, self.delegated_stage_id.stage
+            "UnresolvedExec: delegated_stage={}",
+            self.delegated_stage_id.stage
         )
     }
 }

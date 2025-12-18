@@ -22,7 +22,6 @@ use crate::{
 #[derive(Debug)]
 pub struct ProxyExec {
     pub network: Arc<dyn DistNetwork>,
-    pub stage_id: StageId,
     pub delegated_stage_id: StageId,
     pub delegated_plan: Arc<dyn ExecutionPlan>,
     pub delegated_task_distribution: HashMap<TaskId, NodeId>,
@@ -50,7 +49,6 @@ impl ProxyExec {
         }
         Ok(ProxyExec {
             network,
-            stage_id: unresolved.stage_id,
             delegated_stage_id: unresolved.delegated_stage_id,
             delegated_plan: unresolved.delegated_plan.clone(),
             delegated_task_distribution,
@@ -140,8 +138,8 @@ impl DisplayAs for ProxyExec {
             .join(", ");
         write!(
             f,
-            "ProxyExec: stage={}, delegated_stage={}, delegated_task_distribution=[{}]",
-            self.stage_id.stage, self.delegated_stage_id.stage, task_distribution_display
+            "ProxyExec: delegated_stage={}, delegated_task_distribution=[{}]",
+            self.delegated_stage_id.stage, task_distribution_display
         )
     }
 }
