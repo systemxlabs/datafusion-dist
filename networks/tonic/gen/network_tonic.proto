@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package network_tonic;
+
+service DistTonicService {
+   rpc SendTasks (SendTasksReq) returns (SendTasksResp) {} 
+}
+
+message SendTasksReq {
+  repeated StagePlan stage_plans = 1;
+  repeated TaskId tasks = 2;
+}
+
+message SendTasksResp {}
+
+message StageId {
+  string job_id = 1;
+  uint32 stage = 2;
+}
+
+message TaskId {
+  string job_id = 1;
+  uint32 stage = 2;
+  uint32 partition = 3;
+}
+
+message StagePlan {
+  StageId stage_id = 1;
+  bytes plan = 2;
+}

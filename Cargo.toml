@@ -4,6 +4,7 @@ members = [
   "clusters/memory",
   "clusters/postgres",
   "networks/tonic",
+  "networks/tonic/gen",
 ]
 resolver = "3"
 
@@ -15,9 +16,17 @@ license = "MIT"
 repository = "https://github.com/systemxlabs/datafusion-dist"
 
 [workspace.dependencies]
+datafusion-dist = { path = "dist", version = "0.1.0" }
+datafusion-dist-cluster-postgres = { path = "clusters/postgres", version = "0.1.0" }
+datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.1.0" }
+
 async-trait = "0.1"
 datafusion = "50"
 futures = "0.3"
+local-ip-address = "0.6.8"
+prost = "0.13"
+tonic = "0.13"
+tonic-build = "0.13"
 serde = "1.0"
 sysinfo = "0.37"
 tokio = "1"

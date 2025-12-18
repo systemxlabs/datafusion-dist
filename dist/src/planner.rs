@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use datafusion::{
     common::tree_node::{Transformed, TreeNode},
@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{DistResult, network::StageId, physical_plan::UnresolvedExec};
 
-pub trait DistPlanner {
+pub trait DistPlanner: Debug + Send + Sync {
     fn plan_stages(
         &self,
         job_id: Uuid,
@@ -16,6 +16,7 @@ pub trait DistPlanner {
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>>;
 }
 
+#[derive(Debug)]
 pub struct DefaultPlanner;
 
 impl DistPlanner for DefaultPlanner {

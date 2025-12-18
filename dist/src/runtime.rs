@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
-    network::{DistNetwork, StageId, TaskId},
+    network::{DistNetwork, ScheduledTasks, StageId, TaskId},
     physical_plan::{ProxyExec, UnresolvedExec},
     planner::{DefaultPlanner, DistPlanner},
     schedule::{DistSchedule, RoundRobinScheduler},
@@ -107,7 +107,7 @@ impl DistRuntime {
                             .expect("stage id should be valid"),
                     )
                 })
-                .collect();
+                .collect::<HashMap<_, _>>();
 
             let tasks = node_tasks.get(&node_id).cloned().unwrap_or_default();
 
@@ -126,9 +126,8 @@ impl DistRuntime {
             } else {
                 let network = self.network.clone();
                 let handle = tokio::spawn(async move {
-                    network
-                        .send_tasks(node_id.clone(), node_stage_plans, tasks)
-                        .await?;
+                    let scheduled_tasks = ScheduledTasks::new(node_stage_plans, tasks);
+                    network.send_tasks(node_id.clone(), scheduled_tasks).await?;
                     Ok::<_, DistError>(())
                 });
                 handles.push(handle);
@@ -195,23 +194,18 @@ impl DistRuntime {
         self.network.execute_task(node_id, task_id).await
     }
 
-    pub async fn receive_plans(
-        &self,
-        stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
-        tasks: Vec<TaskId>,
-    ) -> DistResult<()> {
+    pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) {
         let mut guard = self.stage_plans.lock().await;
-        guard.extend(stage_plans);
+        guard.extend(scheduled_tasks.stage_plans);
         let mut guard = self.tasks.lock().await;
         let task_state = TaskState {
             running: false,
             create_at: timestamp_ms(),
             start_at: 0,
         };
-        for task_id in tasks {
+        for task_id in scheduled_tasks.task_ids {
             guard.insert(task_id, task_state.clone());
         }
-        Ok(())
     }
 }
 

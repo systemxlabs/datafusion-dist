@@ -5,3 +5,12 @@ edition.workspace = true
 homepage.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[dependencies]
+datafusion-dist = { workspace = true }
+
+async-trait = { workspace = true }
+datafusion = { workspace = true }
+prost = { workspace = true }
+tonic = { workspace = true }
+uuid = { workspace = true }
