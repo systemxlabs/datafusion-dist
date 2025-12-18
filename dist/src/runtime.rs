@@ -1,14 +1,18 @@
 use std::{
     collections::{HashMap, HashSet},
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
 };
 
 use datafusion::{
+    arrow::array::RecordBatch,
     common::tree_node::{Transformed, TreeNode},
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
-use futures::{StreamExt, TryStreamExt};
+
+use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -19,6 +23,7 @@ use crate::{
     physical_plan::{ProxyExec, UnresolvedExec},
     planner::{DefaultPlanner, DistPlanner},
     schedule::{DistSchedule, RoundRobinScheduler},
+    util::timestamp_ms,
 };
 
 pub struct DistRuntime {
@@ -29,6 +34,7 @@ pub struct DistRuntime {
     pub planner: Arc<dyn DistPlanner>,
     pub scheduler: Arc<dyn DistSchedule>,
     pub stage_plans: Arc<Mutex<HashMap<StageId, Arc<dyn ExecutionPlan>>>>,
+    pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
 }
 
 impl DistRuntime {
@@ -45,6 +51,7 @@ impl DistRuntime {
             planner: Arc::new(DefaultPlanner),
             scheduler: Arc::new(RoundRobinScheduler),
             stage_plans: Arc::new(Mutex::new(HashMap::new())),
+            tasks: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -74,11 +81,16 @@ impl DistRuntime {
         }
 
         let mut node_stages = HashMap::new();
+        let mut node_tasks = HashMap::new();
         for (task_id, node_id) in task_distribution.iter() {
             node_stages
                 .entry(node_id.clone())
                 .or_insert_with(HashSet::new)
                 .insert(task_id.stage_id());
+            node_tasks
+                .entry(node_id.clone())
+                .or_insert_with(Vec::new)
+                .push(*task_id);
         }
 
         // Send stage plans to cluster nodes
@@ -97,16 +109,25 @@ impl DistRuntime {
                 })
                 .collect();
 
+            let tasks = node_tasks.get(&node_id).cloned().unwrap_or_default();
+
             if node_id == self.node_id {
                 let mut guard = self.stage_plans.lock().await;
-                for (stage_id, stage_plan) in node_stage_plans {
-                    guard.insert(stage_id, stage_plan);
+                guard.extend(node_stage_plans);
+                let mut guard = self.tasks.lock().await;
+                let task_state = TaskState {
+                    running: false,
+                    create_at: timestamp_ms(),
+                    start_at: 0,
+                };
+                for task_id in tasks {
+                    guard.insert(task_id, task_state.clone());
                 }
             } else {
                 let network = self.network.clone();
                 let handle = tokio::spawn(async move {
                     network
-                        .send_plans(node_id.clone(), node_stage_plans)
+                        .send_tasks(node_id.clone(), node_stage_plans, tasks)
                         .await?;
                     Ok::<_, DistError>(())
                 });
@@ -137,8 +158,28 @@ impl DistRuntime {
             .clone();
         drop(guard);
 
+        let mut guard = self.tasks.lock().await;
+        if let Some(task_stage) = guard.get_mut(&task_id) {
+            task_stage.running = true;
+            task_stage.start_at = timestamp_ms();
+        } else {
+            return Err(DistError::internal(format!(
+                "Task {task_id} not found in this node"
+            )));
+        }
+        drop(guard);
+
         let df_stream = plan.execute(task_id.partition as usize, self.ctx.task_ctx())?;
-        Ok(df_stream.map_err(DistError::from).boxed())
+        let stream = df_stream.map_err(DistError::from).boxed();
+
+        let task_stream = TaskStream {
+            task_id,
+            tasks: self.tasks.clone(),
+            stage_plans: self.stage_plans.clone(),
+            stream,
+        };
+
+        Ok(task_stream.boxed())
     }
 
     pub async fn execute_remote(
@@ -157,9 +198,19 @@ impl DistRuntime {
     pub async fn receive_plans(
         &self,
         stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
+        tasks: Vec<TaskId>,
     ) -> DistResult<()> {
         let mut guard = self.stage_plans.lock().await;
         guard.extend(stage_plans);
+        let mut guard = self.tasks.lock().await;
+        let task_state = TaskState {
+            running: false,
+            create_at: timestamp_ms(),
+            start_at: 0,
+        };
+        for task_id in tasks {
+            guard.insert(task_id, task_state.clone());
+        }
         Ok(())
     }
 }
@@ -179,4 +230,26 @@ fn resolve_stage_plan(
         }
     })?;
     Ok(transformed.data)
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskState {
+    pub running: bool,
+    pub create_at: i64,
+    pub start_at: i64,
+}
+
+pub struct TaskStream {
+    pub task_id: TaskId,
+    pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
+    pub stage_plans: Arc<Mutex<HashMap<StageId, Arc<dyn ExecutionPlan>>>>,
+    pub stream: RecordBatchStream,
+}
+
+impl Stream for TaskStream {
+    type Item = DistResult<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.stream.as_mut().poll_next(cx)
+    }
 }

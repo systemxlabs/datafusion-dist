@@ -5,6 +5,7 @@ pub mod physical_plan;
 pub mod planner;
 pub mod runtime;
 pub mod schedule;
+pub mod util;
 
 use std::pin::Pin;
 

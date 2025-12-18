@@ -15,10 +15,11 @@ pub trait DistNetwork: Debug + Send + Sync {
     fn local_node(&self) -> NodeId;
 
     // Send task plan
-    async fn send_plans(
+    async fn send_tasks(
         &self,
         node_id: NodeId,
         stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
+        task_ids: Vec<TaskId>,
     ) -> DistResult<()>;
 
     // Execute task plan
