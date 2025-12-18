@@ -10,7 +10,7 @@ use crate::DistResult;
 #[async_trait::async_trait]
 pub trait DistCluster: Debug + Send + Sync {
     // Send heartbeat
-    async fn heartbeat(&self, state: NodeState) -> DistResult<()>;
+    async fn heartbeat(&self, node_id: NodeId, state: NodeState) -> DistResult<()>;
     // Get alive nodes
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>>;
 }
