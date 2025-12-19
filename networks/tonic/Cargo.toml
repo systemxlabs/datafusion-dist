@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 datafusion-dist = { workspace = true }
 
+arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
