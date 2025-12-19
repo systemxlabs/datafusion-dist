@@ -39,13 +39,13 @@ impl PostgresCluster {
                      CREATE TABLE IF NOT EXISTS cluster_nodes (
                          host TEXT NOT NULL,
                          port INTEGER NOT NULL,
-                         total_memory BIGINT,
-                         used_memory BIGINT,
-                         free_memory BIGINT,
-                         available_memory BIGINT,
-                         global_cpu_usage REAL,
+                         total_memory BIGINT NOT NULL,
+                         used_memory BIGINT NOT NULL,
+                         free_memory BIGINT NOT NULL,
+                         available_memory BIGINT NOT NULL,
+                         global_cpu_usage REAL NOT NULL,
                          num_running_tasks INTEGER,
-                         last_heartbeat TIMESTAMPTZ,
+                         last_heartbeat BIGINT NOT NULL,
                          UNIQUE(host, port)
                      )
                      "#,
@@ -64,13 +64,16 @@ impl DistCluster for PostgresCluster {
     async fn heartbeat(&self, node_id: NodeId, state: NodeState) -> DistResult<()> {
         trace!("Sending heartbeat for node");
 
+        // Get current timestamp in seconds as i64
+        let timestamp = chrono::Utc::now().timestamp();
+
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         let query = r#"
                    INSERT INTO cluster_nodes (
                        host, port, total_memory, used_memory, free_memory,
                        available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                    ON CONFLICT (host, port)
                    DO UPDATE SET
                        total_memory = EXCLUDED.total_memory,
@@ -79,7 +82,7 @@ impl DistCluster for PostgresCluster {
                        available_memory = EXCLUDED.available_memory,
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
                        num_running_tasks = EXCLUDED.num_running_tasks,
-                       last_heartbeat = NOW()
+                       last_heartbeat = $9
                    "#;
 
         client
@@ -94,6 +97,7 @@ impl DistCluster for PostgresCluster {
                     &(state.available_memory as i64),
                     &state.global_cpu_usage,
                     &state.num_running_tasks,
+                    &timestamp,
                 ],
             )
             .await
@@ -109,12 +113,10 @@ impl DistCluster for PostgresCluster {
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>> {
         trace!("Fetching alive nodes");
 
-        let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
+        // Calculate cutoff time in seconds as i64
+        let cutoff_time = chrono::Utc::now().timestamp() - self.heartbeat_timeout_seconds as i64;
 
-        let cutoff_time = (chrono::Utc::now()
-            - chrono::Duration::try_seconds(self.heartbeat_timeout_seconds as i64)
-                .unwrap_or_else(|| chrono::Duration::seconds(60)))
-        .naive_utc();
+        let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         let rows = client
                         .query(
