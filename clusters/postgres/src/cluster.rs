@@ -44,7 +44,7 @@ impl PostgresCluster {
                          used_memory BIGINT NOT NULL,
                          free_memory BIGINT NOT NULL,
                          available_memory BIGINT NOT NULL,
-                         global_cpu_usage REAL NOT NULL,
+                         global_cpu_usage FLOAT4 NOT NULL,
                          num_running_tasks INTEGER,
                          last_heartbeat BIGINT NOT NULL,
                          UNIQUE(host, port)
@@ -104,13 +104,13 @@ impl DistCluster for PostgresCluster {
                     &(state.free_memory as i64),
                     &(state.available_memory as i64),
                     &state.global_cpu_usage,
-                    &state.num_running_tasks,
+                    &(state.num_running_tasks as i32),
                     &timestamp,
                 ],
             )
             .await
             .map_err(|e| {
-                PostgresClusterError::Query(format!("Failed to insert heartbeat: {}", e))
+                PostgresClusterError::Query(format!("Failed to insert heartbeat: {e:?}"))
             })?;
 
         debug!("Heartbeat sent successfully");
@@ -173,8 +173,9 @@ impl DistCluster for PostgresCluster {
                     .try_get(6)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
                 num_running_tasks: row
-                    .try_get(7)
-                    .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
+                    .try_get::<_, i32>(7)
+                    .map_err(|e| PostgresClusterError::Query(e.to_string()))?
+                as u32,
             };
 
             result.insert(node_id, node_state);
