@@ -13,22 +13,16 @@ COPY ../clusters ./clusters
 COPY ../networks ./networks
 COPY ../integration-tests ./integration-tests
 
-# Build the application in release mode
-RUN cargo build --release --package datafusion-dist-integration-tests-app
+# Build the application
+RUN cargo build --package datafusion-dist-integration-tests-app
 
 # Runtime stage
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy the built binary from the builder stage
-COPY --from=builder /app/target/release/datafusion-dist-integration-tests-app /app/datafusion-dist-integration-tests-app
+COPY --from=builder /app/target/debug/datafusion-dist-integration-tests-app /app/datafusion-dist-integration-tests-app
 
 # Expose the ports used by the application
 # 50050: DistTonicService
