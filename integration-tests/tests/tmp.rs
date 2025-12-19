@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use datafusion::arrow::{array::RecordBatch, util::pretty::pretty_format_batches};
@@ -9,6 +9,8 @@ use tonic::transport::Endpoint;
 #[tokio::test(flavor = "multi_thread")]
 async fn test_tmp() -> Result<(), Box<dyn Error>> {
     setup_containers();
+
+    tokio::time::sleep(Duration::from_secs(20)).await;
 
     let endpoint = Endpoint::from_static("http://localhost:50061");
     let channel = endpoint.connect().await?;

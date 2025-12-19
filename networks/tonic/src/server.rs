@@ -94,7 +94,7 @@ fn parse_stage_id(proto: protobuf::StageId) -> StageId {
     }
 }
 
-pub fn parse_task_id(proto: protobuf::TaskId) -> TaskId {
+fn parse_task_id(proto: protobuf::TaskId) -> TaskId {
     let job_id = Uuid::parse_str(&proto.job_id)
         .unwrap_or_else(|_| panic!("Failed to parse job id {} as uuid", proto.job_id));
     TaskId {

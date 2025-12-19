@@ -1144,7 +1144,6 @@ dependencies = [
 name = "datafusion-dist-network-tonic"
 version = "0.1.0"
 dependencies = [
- "arrow-flight",
  "async-trait",
  "datafusion",
  "datafusion-dist",

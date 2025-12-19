@@ -20,9 +20,8 @@ use datafusion::{
 use datafusion_dist::{cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime};
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
 use datafusion_dist_network_tonic::{
-    network::{DistTonicNetwork, serialize_task_id},
-    protobuf::{self, dist_tonic_service_server::DistTonicServiceServer},
-    server::{DistTonicServer, parse_task_id},
+    network::DistTonicNetwork, protobuf::dist_tonic_service_server::DistTonicServiceServer,
+    server::DistTonicServer,
 };
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -70,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let dist_tonic_server = Server::builder()
         .add_service(DistTonicServiceServer::new(dist_tonic_service))
-        .serve("[::1]:50050".parse()?);
+        .serve("[::]:50050".parse()?);
 
     let test_flight_sql_service = TestFlightSqlService {
         ctx: ctx.clone(),
@@ -78,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let test_flight_server = Server::builder()
         .add_service(FlightServiceServer::new(test_flight_sql_service))
-        .serve("[::1]:50051".parse()?);
+        .serve("[::]:50051".parse()?);
 
     tokio::select! {
         result = dist_tonic_server => {
@@ -98,6 +97,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
 struct TestFlightSqlService {
     ctx: SessionContext,
     runtime: Arc<DistRuntime>,
+}
+
+#[derive(::prost::Message)]
+pub struct NodeTask {
+    #[prost(string, tag = "1")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub port: u32,
+    #[prost(string, tag = "3")]
+    pub job_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "4")]
+    pub stage: u32,
+    #[prost(uint32, tag = "5")]
+    pub partition: u32,
+}
+
+impl arrow_flight::sql::ProstMessageExt for NodeTask {
+    fn type_url() -> &'static str {
+        "type.googleapis.com/arrow.flight.protocol.sql.NodeTask"
+    }
+
+    fn as_any(&self) -> arrow_flight::sql::Any {
+        arrow_flight::sql::Any {
+            type_url: NodeTask::type_url().to_string(),
+            value: self.encode_to_vec().into(),
+        }
+    }
 }
 
 type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -134,25 +160,40 @@ impl FlightSqlService for TestFlightSqlService {
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         debug!("do_get_fallback type_url: {}", message.type_url);
-        if !message.is::<protobuf::TaskId>() {
+        if !message.is::<NodeTask>() {
             Err(Status::unimplemented(format!(
                 "do_get: The defined request is invalid: {}",
                 message.type_url
             )))?
         }
 
-        let proto_task_id: protobuf::TaskId = message
+        let node_task: NodeTask = message
             .unpack()
             .map_err(|e| Status::internal(format!("{e:?}")))?
-            .ok_or_else(|| Status::internal("Expected an TaskId but got None!"))?;
+            .ok_or_else(|| Status::internal("Expected NodeTask but got None!"))?;
 
-        let task_id = parse_task_id(proto_task_id);
+        let node_id = NodeId {
+            host: node_task.host,
+            port: node_task.port as u16,
+        };
+        let task_id = TaskId {
+            job_id: Uuid::parse_str(&node_task.job_id).expect("job id is not uuid"),
+            stage: node_task.stage,
+            partition: node_task.partition,
+        };
 
-        let stream = self
-            .runtime
-            .execute_local(task_id)
-            .await
-            .map_err(|e| Status::from_error(Box::new(e)))?;
+        let stream = if self.runtime.node_id == node_id {
+            self.runtime
+                .execute_local(task_id)
+                .await
+                .map_err(|e| Status::from_error(Box::new(e)))?
+        } else {
+            self.runtime
+                .execute_remote(node_id, task_id)
+                .await
+                .map_err(|e| Status::from_error(Box::new(e)))?
+        };
+
         let stream = stream
             .map_err(|e| FlightError::ExternalError(Box::new(e)))
             .boxed();
@@ -221,15 +262,17 @@ impl FlightSqlService for TestFlightSqlService {
 fn build_flight_endpoints(task_distribution: HashMap<TaskId, NodeId>) -> Vec<FlightEndpoint> {
     let mut endpoints = Vec::new();
     for (task_id, node_id) in task_distribution {
-        let proto_task_id = serialize_task_id(task_id);
-        let buf = proto_task_id.as_any().encode_to_vec();
+        let node_task = NodeTask {
+            host: node_id.host,
+            port: node_id.port as u32,
+            job_id: task_id.job_id.to_string(),
+            stage: task_id.stage,
+            partition: task_id.partition,
+        };
+        let buf = node_task.as_any().encode_to_vec();
         let ticket = Ticket { ticket: buf.into() };
 
-        let location = format!("grpc://{}:{}", node_id.host, node_id.port);
-
-        let endpoint = FlightEndpoint::new()
-            .with_ticket(ticket)
-            .with_location(location);
+        let endpoint = FlightEndpoint::new().with_ticket(ticket);
         endpoints.push(endpoint);
     }
     endpoints

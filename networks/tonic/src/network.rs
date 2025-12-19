@@ -123,7 +123,7 @@ fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
     }
 }
 
-pub fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
+fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
     protobuf::TaskId {
         job_id: task_id.job_id.to_string(),
         stage: task_id.stage,

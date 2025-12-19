@@ -213,11 +213,17 @@ impl DistRuntime {
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) {
         debug!(
-            "Received tasks: {}",
+            "Received tasks: {} and plans of stages: {}",
             scheduled_tasks
                 .task_ids
                 .iter()
                 .map(|t| t.to_string())
+                .collect::<Vec<String>>()
+                .join(", "),
+            scheduled_tasks
+                .stage_plans
+                .keys()
+                .map(|k| k.to_string())
                 .collect::<Vec<String>>()
                 .join(", ")
         );
