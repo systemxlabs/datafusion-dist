@@ -7,7 +7,8 @@ use std::{
 use datafusion::{
     common::tree_node::{Transformed, TreeNode},
     physical_plan::{
-        ExecutionPlan, display::DisplayableExecutionPlan, repartition::RepartitionExec,
+        ExecutionPlan, coalesce_partitions::CoalescePartitionsExec,
+        display::DisplayableExecutionPlan, repartition::RepartitionExec,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -84,8 +85,10 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_count = 0u32;
         let plan = plan
             .transform_up(|node| {
-                if let Some(exec) = node.as_any().downcast_ref::<RepartitionExec>() {
-                    stage_count += exec.children().len() as u32;
+                if node.as_any().is::<RepartitionExec>()
+                    || node.as_any().is::<CoalescePartitionsExec>()
+                {
+                    stage_count += node.children().len() as u32;
                 }
                 Ok(Transformed::no(node))
             })?
@@ -94,7 +97,9 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_plans = HashMap::new();
         let final_plan = plan
             .transform_up(|node| {
-                if node.as_any().is::<RepartitionExec>() {
+                if node.as_any().is::<RepartitionExec>()
+                    || node.as_any().is::<CoalescePartitionsExec>()
+                {
                     let mut new_children = Vec::with_capacity(node.children().len());
 
                     for child in node.children() {

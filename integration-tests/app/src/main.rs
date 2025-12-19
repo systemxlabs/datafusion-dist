@@ -1,3 +1,5 @@
+pub mod data;
+
 use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc};
 
 use arrow_flight::{
@@ -30,6 +32,8 @@ use prost::Message;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
 use uuid::Uuid;
 
+use crate::data::register_tables;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     unsafe {
@@ -52,6 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let ctx = SessionContext::new();
+    register_tables(&ctx);
+
     let config = DistConfig::default();
 
     let runtime = Arc::new(DistRuntime::new(

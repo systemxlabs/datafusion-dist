@@ -18,7 +18,7 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
-    heartbeater::Heartbeater,
+    heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks},
     planner::{
         DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,

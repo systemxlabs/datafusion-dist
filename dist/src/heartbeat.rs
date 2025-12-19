@@ -36,7 +36,10 @@ impl Heartbeater {
         let cluster = self.cluster.clone();
         let tasks = self.tasks.clone();
         let heartbeat_interval = self.heartbeat_interval;
+
         tokio::spawn(async move {
+            let mut sys = sysinfo::System::new();
+
             loop {
                 let guard = tasks.lock().await;
                 let (num_ready_tasks, num_running_tasks) =
@@ -51,7 +54,6 @@ impl Heartbeater {
                         });
                 drop(guard);
 
-                let mut sys = sysinfo::System::new();
                 sys.refresh_memory();
                 sys.refresh_cpu_usage();
 
