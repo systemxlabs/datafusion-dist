@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "dist",
-  "clusters/memory",
   "clusters/postgres",
   "integration-tests",
   "integration-tests/app",
