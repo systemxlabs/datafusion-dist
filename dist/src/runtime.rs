@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
+    heartbeater::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageId, TaskId},
     physical_plan::{ProxyExec, UnresolvedExec},
     planner::{DefaultPlanner, DistPlanner},
@@ -33,6 +34,7 @@ pub struct DistRuntime {
     pub network: Arc<dyn DistNetwork>,
     pub planner: Arc<dyn DistPlanner>,
     pub scheduler: Arc<dyn DistSchedule>,
+    pub heartbeater: Arc<Heartbeater>,
     pub stage_plans: Arc<Mutex<HashMap<StageId, Arc<dyn ExecutionPlan>>>>,
     pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
 }
@@ -43,6 +45,9 @@ impl DistRuntime {
         cluster: Arc<dyn DistCluster>,
         network: Arc<dyn DistNetwork>,
     ) -> DistResult<Self> {
+        let node_id = network.local_node();
+        let tasks = Arc::new(Mutex::new(HashMap::new()));
+        let heartbeater = Heartbeater::new(node_id.clone(), cluster.clone(), tasks.clone());
         Ok(Self {
             node_id: network.local_node(),
             ctx,
@@ -50,8 +55,9 @@ impl DistRuntime {
             network,
             planner: Arc::new(DefaultPlanner),
             scheduler: Arc::new(RoundRobinScheduler),
+            heartbeater: Arc::new(heartbeater),
             stage_plans: Arc::new(Mutex::new(HashMap::new())),
-            tasks: Arc::new(Mutex::new(HashMap::new())),
+            tasks,
         })
     }
 
@@ -61,6 +67,10 @@ impl DistRuntime {
 
     pub fn with_scheduler(self, scheduler: Arc<dyn DistSchedule>) -> Self {
         Self { scheduler, ..self }
+    }
+
+    pub async fn start(&self) {
+        self.heartbeater.start();
     }
 
     pub async fn submit(

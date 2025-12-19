@@ -11,6 +11,7 @@ async-trait = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 local-ip-address = { workspace = true }
+log = { workspace = true }
 serde = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }

@@ -33,6 +33,14 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    unsafe {
+        std::env::set_var(
+            "RUST_LOG",
+            "debug,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=debug",
+        );
+    }
+    env_logger::init();
+
     let port = 50050u16;
 
     let cluster = PostgresClusterBuilder::new("localhost", 5432, "postgres", "password")
@@ -51,6 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(cluster),
         Arc::new(network),
     )?);
+    runtime.start().await;
 
     let dist_tonic_service = DistTonicServer {
         runtime: runtime.clone(),

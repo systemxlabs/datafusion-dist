@@ -13,6 +13,7 @@ datafusion-dist-cluster-postgres = { workspace = true }
 datafusion-dist-network-tonic = { workspace = true }
 
 arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
+env_logger = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 futures = { workspace = true }

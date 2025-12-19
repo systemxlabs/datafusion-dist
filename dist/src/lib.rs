@@ -1,5 +1,6 @@
 pub mod cluster;
 mod error;
+pub mod heartbeater;
 pub mod network;
 pub mod physical_plan;
 pub mod planner;

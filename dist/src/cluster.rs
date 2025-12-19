@@ -27,7 +27,7 @@ impl Display for NodeId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeState {
     pub total_memory: u64,
     pub used_memory: u64,
