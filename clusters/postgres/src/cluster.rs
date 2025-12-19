@@ -78,7 +78,7 @@ impl DistCluster for PostgresCluster {
                        available_memory = EXCLUDED.available_memory,
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
                        num_running_tasks = EXCLUDED.num_running_tasks,
-                       last_heartbeat = NOW(),
+                       last_heartbeat = NOW()
                    "#;
 
         client
@@ -103,6 +103,7 @@ impl DistCluster for PostgresCluster {
         debug!("Heartbeat sent successfully");
         Ok(())
     }
+
     // Get alive nodes
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>> {
         trace!("Fetching alive nodes");
@@ -143,26 +144,26 @@ impl DistCluster for PostgresCluster {
 
             let node_state = NodeState {
                 total_memory: row
-                    .try_get::<_, i64>(3)
+                    .try_get::<_, i64>(2)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
                 used_memory: row
-                    .try_get::<_, i64>(4)
+                    .try_get::<_, i64>(3)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
                 free_memory: row
-                    .try_get::<_, i64>(5)
+                    .try_get::<_, i64>(4)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
                 available_memory: row
-                    .try_get::<_, i64>(6)
+                    .try_get::<_, i64>(5)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
                 global_cpu_usage: row
-                    .try_get(7)
+                    .try_get(6)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
                 num_running_tasks: row
-                    .try_get(8)
+                    .try_get(7)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
             };
 
