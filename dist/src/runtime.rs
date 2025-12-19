@@ -6,10 +6,7 @@ use std::{
 };
 
 use datafusion::{
-    arrow::array::RecordBatch,
-    common::tree_node::{Transformed, TreeNode},
-    physical_plan::ExecutionPlan,
-    prelude::SessionContext,
+    arrow::array::RecordBatch, physical_plan::ExecutionPlan, prelude::SessionContext,
 };
 
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -23,8 +20,9 @@ use crate::{
     config::DistConfig,
     heartbeater::Heartbeater,
     network::{DistNetwork, ScheduledTasks},
-    physical_plan::{ProxyExec, UnresolvedExec},
-    planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId},
+    planner::{
+        DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,
+    },
     schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
     util::timestamp_ms,
 };
@@ -235,23 +233,6 @@ impl DistRuntime {
             guard.insert(task_id, task_state.clone());
         }
     }
-}
-
-fn resolve_stage_plan(
-    stage_plan: Arc<dyn ExecutionPlan>,
-    task_distribution: &HashMap<TaskId, NodeId>,
-    network: &Arc<dyn DistNetwork>,
-) -> DistResult<Arc<dyn ExecutionPlan>> {
-    let transformed = stage_plan.transform(|node| {
-        if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
-            let proxy =
-                ProxyExec::try_from_unresolved(unresolved, network.clone(), task_distribution)?;
-            Ok(Transformed::yes(Arc::new(proxy)))
-        } else {
-            Ok(Transformed::no(node))
-        }
-    })?;
-    Ok(transformed.data)
 }
 
 #[derive(Debug, Clone)]

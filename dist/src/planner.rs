@@ -13,7 +13,12 @@ use datafusion::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{DistResult, physical_plan::UnresolvedExec};
+use crate::{
+    DistResult,
+    cluster::NodeId,
+    network::DistNetwork,
+    physical_plan::{ProxyExec, UnresolvedExec},
+};
 
 pub trait DistPlanner: Debug + Send + Sync {
     fn plan_stages(
@@ -119,6 +124,23 @@ impl DistPlanner for DefaultPlanner {
 
         Ok(stage_plans)
     }
+}
+
+pub fn resolve_stage_plan(
+    stage_plan: Arc<dyn ExecutionPlan>,
+    task_distribution: &HashMap<TaskId, NodeId>,
+    network: &Arc<dyn DistNetwork>,
+) -> DistResult<Arc<dyn ExecutionPlan>> {
+    let transformed = stage_plan.transform(|node| {
+        if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
+            let proxy =
+                ProxyExec::try_from_unresolved(unresolved, network.clone(), task_distribution)?;
+            Ok(Transformed::yes(Arc::new(proxy)))
+        } else {
+            Ok(Transformed::no(node))
+        }
+    })?;
+    Ok(transformed.data)
 }
 
 pub struct DisplayableStagePlans<'a>(pub &'a HashMap<StageId, Arc<dyn ExecutionPlan>>);
