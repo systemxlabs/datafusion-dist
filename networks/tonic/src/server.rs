@@ -7,7 +7,8 @@ use datafusion::{
 };
 use datafusion_dist::{
     DistResult,
-    network::{ScheduledTasks, StageId, TaskId},
+    network::ScheduledTasks,
+    planner::{StageId, TaskId},
     runtime::DistRuntime,
 };
 use datafusion_proto::{

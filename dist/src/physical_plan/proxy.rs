@@ -15,8 +15,9 @@ use futures::TryStreamExt;
 use crate::{
     DistError, DistResult,
     cluster::NodeId,
-    network::{DistNetwork, StageId, TaskId},
+    network::DistNetwork,
     physical_plan::UnresolvedExec,
+    planner::{StageId, TaskId},
 };
 
 #[derive(Debug)]

@@ -1,14 +1,12 @@
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    sync::Arc,
-};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use datafusion::physical_plan::ExecutionPlan;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::{DistResult, RecordBatchStream, cluster::NodeId};
+use crate::{
+    DistResult, RecordBatchStream,
+    cluster::NodeId,
+    planner::{StageId, TaskId},
+};
 
 #[async_trait::async_trait]
 pub trait DistNetwork: Debug + Send + Sync {
@@ -36,49 +34,5 @@ impl ScheduledTasks {
             stage_plans,
             task_ids,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct StageId {
-    pub job_id: Uuid,
-    pub stage: u32,
-}
-
-impl StageId {
-    pub fn task_id(&self, partition: u32) -> TaskId {
-        TaskId {
-            job_id: self.job_id,
-            stage: self.stage,
-            partition,
-        }
-    }
-}
-
-impl Display for StageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.job_id, self.stage)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId {
-    pub job_id: Uuid,
-    pub stage: u32,
-    pub partition: u32,
-}
-
-impl TaskId {
-    pub fn stage_id(&self) -> StageId {
-        StageId {
-            job_id: self.job_id,
-            stage: self.stage,
-        }
-    }
-}
-
-impl Display for TaskId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}/{}", self.job_id, self.stage, self.partition)
     }
 }

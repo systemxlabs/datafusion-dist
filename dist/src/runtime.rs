@@ -21,9 +21,9 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
     heartbeater::Heartbeater,
-    network::{DistNetwork, ScheduledTasks, StageId, TaskId},
+    network::{DistNetwork, ScheduledTasks},
     physical_plan::{ProxyExec, UnresolvedExec},
-    planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner},
+    planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId},
     schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
     util::timestamp_ms,
 };

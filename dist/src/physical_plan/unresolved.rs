@@ -10,7 +10,7 @@ use datafusion::{
     },
 };
 
-use crate::network::StageId;
+use crate::planner::StageId;
 
 #[derive(Debug)]
 pub struct UnresolvedExec {

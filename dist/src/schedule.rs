@@ -9,7 +9,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use crate::{
     DistError, DistResult,
     cluster::{NodeId, NodeState},
-    network::{StageId, TaskId},
+    planner::{StageId, TaskId},
 };
 
 #[async_trait::async_trait]

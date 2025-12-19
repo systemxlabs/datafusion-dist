@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     cluster::{DistCluster, NodeId, NodeState},
-    network::TaskId,
+    planner::TaskId,
     runtime::TaskState,
 };
 

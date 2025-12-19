@@ -7,7 +7,8 @@ use datafusion::{
 use datafusion_dist::{
     DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
-    network::{DistNetwork, ScheduledTasks, StageId, TaskId},
+    network::{DistNetwork, ScheduledTasks},
+    planner::{StageId, TaskId},
     util::get_local_ip,
 };
 use datafusion_proto::{

@@ -17,7 +17,7 @@ use datafusion::{
     physical_plan::display::DisplayableExecutionPlan,
     prelude::SessionContext,
 };
-use datafusion_dist::{cluster::NodeId, network::TaskId, runtime::DistRuntime};
+use datafusion_dist::{cluster::NodeId, planner::TaskId, runtime::DistRuntime};
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
 use datafusion_dist_network_tonic::{
     network::{DistTonicNetwork, serialize_task_id},
