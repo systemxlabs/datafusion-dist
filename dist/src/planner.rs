@@ -1,8 +1,14 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use datafusion::{
     common::tree_node::{Transformed, TreeNode},
-    physical_plan::{ExecutionPlan, repartition::RepartitionExec},
+    physical_plan::{
+        ExecutionPlan, display::DisplayableExecutionPlan, repartition::RepartitionExec,
+    },
 };
 use uuid::Uuid;
 
@@ -34,8 +40,6 @@ impl DistPlanner for DefaultPlanner {
                 Ok(Transformed::no(node))
             })?
             .data;
-        // final stage
-        stage_count += 1;
 
         let mut stage_plans = HashMap::new();
         let final_plan = plan
@@ -69,5 +73,21 @@ impl DistPlanner for DefaultPlanner {
         stage_plans.insert(final_stage_id, final_plan);
 
         Ok(stage_plans)
+    }
+}
+
+pub struct DisplayableStagePlans<'a>(pub &'a HashMap<StageId, Arc<dyn ExecutionPlan>>);
+
+impl Display for DisplayableStagePlans<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (stage_id, plan) in self.0.iter() {
+            writeln!(f, "===============Stage {}===============", stage_id.stage)?;
+            writeln!(
+                f,
+                "{}",
+                DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+            )?;
+        }
+        Ok(())
     }
 }

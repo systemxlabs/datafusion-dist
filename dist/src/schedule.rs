@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -50,5 +54,34 @@ impl DistSchedule for RoundRobinScheduler {
             }
         }
         Ok(assignments)
+    }
+}
+
+pub struct DisplayableTaskDistribution<'a>(pub &'a HashMap<TaskId, NodeId>);
+
+impl Display for DisplayableTaskDistribution<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut node_tasks = HashMap::new();
+
+        for (task_id, node_id) in self.0.iter() {
+            node_tasks
+                .entry(node_id)
+                .or_insert_with(Vec::new)
+                .push(task_id);
+        }
+
+        let mut node_dist = Vec::new();
+        for (node_id, tasks) in node_tasks.iter() {
+            node_dist.push(format!(
+                "{}->{node_id}",
+                tasks
+                    .iter()
+                    .map(|t| format!("{}/{}", t.stage, t.partition))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            ));
+        }
+
+        write!(f, "{}", node_dist.join(", "))
     }
 }

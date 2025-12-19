@@ -175,7 +175,7 @@ impl DistCluster for PostgresCluster {
                 num_running_tasks: row
                     .try_get::<_, i32>(7)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
-                as u32,
+                    as u32,
             };
 
             result.insert(node_id, node_state);

@@ -189,6 +189,7 @@ impl FlightSqlService for TestFlightSqlService {
             .submit(plan)
             .await
             .map_err(|e| Status::from_error(Box::new(e)))?;
+        debug!("Stage0 task distribution: {:?}", stage0_task_distribution);
 
         let endpoints = build_flight_endpoints(stage0_task_distribution);
         let schema_bytes = schema_to_ipc(schema)?;

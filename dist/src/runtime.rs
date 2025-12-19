@@ -13,6 +13,7 @@ use datafusion::{
 };
 
 use futures::{Stream, StreamExt, TryStreamExt};
+use log::debug;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -22,8 +23,8 @@ use crate::{
     heartbeater::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageId, TaskId},
     physical_plan::{ProxyExec, UnresolvedExec},
-    planner::{DefaultPlanner, DistPlanner},
-    schedule::{DistSchedule, RoundRobinScheduler},
+    planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner},
+    schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
     util::timestamp_ms,
 };
 
@@ -79,10 +80,18 @@ impl DistRuntime {
     ) -> DistResult<(Uuid, HashMap<TaskId, NodeId>)> {
         let job_id = Uuid::new_v4();
         let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
+        debug!(
+            "job {job_id} stage plans:\n{}",
+            DisplayableStagePlans(&stage_plans)
+        );
 
         let node_states = self.cluster.alive_nodes().await?;
 
         let task_distribution = self.scheduler.schedule(node_states, &stage_plans).await?;
+        debug!(
+            "job {job_id} task distribution: {}",
+            DisplayableTaskDistribution(&task_distribution)
+        );
 
         // Resolve stage plans based on task distribution
         for (_, stage_plan) in stage_plans.iter_mut() {
@@ -121,22 +130,13 @@ impl DistRuntime {
 
             let tasks = node_tasks.get(&node_id).cloned().unwrap_or_default();
 
+            let scheduled_tasks = ScheduledTasks::new(node_stage_plans, tasks);
+
             if node_id == self.node_id {
-                let mut guard = self.stage_plans.lock().await;
-                guard.extend(node_stage_plans);
-                let mut guard = self.tasks.lock().await;
-                let task_state = TaskState {
-                    running: false,
-                    create_at: timestamp_ms(),
-                    start_at: 0,
-                };
-                for task_id in tasks {
-                    guard.insert(task_id, task_state.clone());
-                }
+                self.receive_tasks(scheduled_tasks).await;
             } else {
                 let network = self.network.clone();
                 let handle = tokio::spawn(async move {
-                    let scheduled_tasks = ScheduledTasks::new(node_stage_plans, tasks);
                     network.send_tasks(node_id.clone(), scheduled_tasks).await?;
                     Ok::<_, DistError>(())
                 });
@@ -205,6 +205,15 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) {
+        debug!(
+            "Received tasks: {}",
+            scheduled_tasks
+                .task_ids
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
         let mut guard = self.stage_plans.lock().await;
         guard.extend(scheduled_tasks.stage_plans);
         let mut guard = self.tasks.lock().await;
