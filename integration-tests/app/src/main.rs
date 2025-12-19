@@ -17,7 +17,7 @@ use datafusion::{
     physical_plan::display::DisplayableExecutionPlan,
     prelude::SessionContext,
 };
-use datafusion_dist::{cluster::NodeId, planner::TaskId, runtime::DistRuntime};
+use datafusion_dist::{cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime};
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
 use datafusion_dist_network_tonic::{
     network::{DistTonicNetwork, serialize_task_id},
@@ -53,12 +53,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let ctx = SessionContext::new();
+    let config = DistConfig::default();
 
-    let runtime = Arc::new(DistRuntime::try_new(
+    let runtime = Arc::new(DistRuntime::new(
         ctx.clone(),
+        Arc::new(config),
         Arc::new(cluster),
         Arc::new(network),
-    )?);
+    ));
     runtime.start().await;
 
     let dist_tonic_service = DistTonicServer {

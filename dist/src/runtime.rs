@@ -20,6 +20,7 @@ use uuid::Uuid;
 use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
+    config::DistConfig,
     heartbeater::Heartbeater,
     network::{DistNetwork, ScheduledTasks},
     physical_plan::{ProxyExec, UnresolvedExec},
@@ -31,6 +32,7 @@ use crate::{
 pub struct DistRuntime {
     pub node_id: NodeId,
     pub ctx: SessionContext,
+    pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
     pub planner: Arc<dyn DistPlanner>,
@@ -41,17 +43,24 @@ pub struct DistRuntime {
 }
 
 impl DistRuntime {
-    pub fn try_new(
+    pub fn new(
         ctx: SessionContext,
+        config: Arc<DistConfig>,
         cluster: Arc<dyn DistCluster>,
         network: Arc<dyn DistNetwork>,
-    ) -> DistResult<Self> {
+    ) -> Self {
         let node_id = network.local_node();
         let tasks = Arc::new(Mutex::new(HashMap::new()));
-        let heartbeater = Heartbeater::new(node_id.clone(), cluster.clone(), tasks.clone());
-        Ok(Self {
+        let heartbeater = Heartbeater::new(
+            node_id.clone(),
+            cluster.clone(),
+            tasks.clone(),
+            config.heartbeat_interval,
+        );
+        Self {
             node_id: network.local_node(),
             ctx,
+            config,
             cluster,
             network,
             planner: Arc::new(DefaultPlanner),
@@ -59,7 +68,7 @@ impl DistRuntime {
             heartbeater: Arc::new(heartbeater),
             stage_plans: Arc::new(Mutex::new(HashMap::new())),
             tasks,
-        })
+        }
     }
 
     pub fn with_planner(self, planner: Arc<dyn DistPlanner>) -> Self {

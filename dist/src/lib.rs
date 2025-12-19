@@ -1,4 +1,5 @@
 pub mod cluster;
+pub mod config;
 mod error;
 pub mod heartbeater;
 pub mod network;
