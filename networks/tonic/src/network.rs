@@ -136,7 +136,10 @@ fn parse_record_batch_res(
 ) -> DistResult<RecordBatch> {
     let proto_batch = proto_res.map_err(|e| DistError::network(Box::new(e)))?;
     let reader = StreamReader::try_new(proto_batch.data.as_slice(), None)?;
-    let batches = reader.into_iter().collect::<Result<Vec<_>, ArrowError>>()?;
+    let mut batches = reader.into_iter().collect::<Result<Vec<_>, ArrowError>>()?;
+    if batches.len() == 1 {
+        return Ok(batches.remove(0));
+    }
     let first_batch = batches
         .first()
         .ok_or_else(|| DistError::internal("No batch found in stream reader"))?;

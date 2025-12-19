@@ -1111,10 +1111,14 @@ dependencies = [
 name = "datafusion-dist-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "arrow-flight",
+ "datafusion",
  "datafusion-dist",
  "datafusion-dist-cluster-postgres",
  "datafusion-dist-network-tonic",
+ "futures",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
