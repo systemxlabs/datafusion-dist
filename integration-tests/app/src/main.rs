@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let port = 50050u16;
 
-    let cluster = PostgresClusterBuilder::new("localhost", 5432, "postgres", "password")
+    let cluster = PostgresClusterBuilder::new("postgres", 5432, "postgres", "password")
         .build()
         .await?;
 
@@ -108,6 +108,7 @@ impl FlightSqlService for TestFlightSqlService {
         &self,
         _request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<BoxedFlightStream<HandshakeResponse>>, Status> {
+        debug!("do_handshake");
         let token = Uuid::new_v4();
 
         let result = HandshakeResponse {
@@ -169,6 +170,7 @@ impl FlightSqlService for TestFlightSqlService {
         query: CommandStatementQuery,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        debug!("get_flight_info_statement query: {}", query.query);
         let df = self
             .ctx
             .sql(&query.query)

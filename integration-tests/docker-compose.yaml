@@ -1,0 +1,47 @@
+networks:
+  dist_bridge:
+
+services:
+  postgres:
+    image: postgres:latest
+    networks:
+      dist_bridge:
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+
+  integration-tests-app0:
+    build:
+      context: ../
+      dockerfile: integration-tests/app/Dockerfile
+    image: datafusion-dist-integration-tests-app
+    networks:
+      dist_bridge:
+    depends_on:
+      - postgres
+    ports:
+      - "50060:50050"
+      - "50061:50051"
+
+  integration-tests-app1:
+    image: datafusion-dist-integration-tests-app
+    networks:
+      dist_bridge:
+    depends_on:
+      - integration-tests-app0
+    ports:
+      - "50070:50050"
+      - "50071:50051"
+
+  integration-tests-app2:
+    image: datafusion-dist-integration-tests-app
+    networks:
+      dist_bridge:
+    depends_on:
+      - integration-tests-app0
+    ports:
+      - "50080:50050"
+      - "50081:50051"
