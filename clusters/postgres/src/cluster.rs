@@ -6,6 +6,7 @@ use bb8_postgres::tokio_postgres::NoTls;
 use datafusion_dist::{
     DistResult,
     cluster::{DistCluster, NodeId, NodeState},
+    util::timestamp_ms,
 };
 use log::{debug, trace};
 
@@ -56,6 +57,13 @@ impl PostgresCluster {
 
         Ok(())
     }
+
+    fn calculate_cutoff_time(&self) -> i64 {
+        let timeout_ms = i64::from(self.heartbeat_timeout_seconds)
+            .checked_mul(1000)
+            .unwrap_or(60_000);
+        timestamp_ms() - timeout_ms
+    }
 }
 
 #[async_trait::async_trait]
@@ -64,8 +72,8 @@ impl DistCluster for PostgresCluster {
     async fn heartbeat(&self, node_id: NodeId, state: NodeState) -> DistResult<()> {
         trace!("Sending heartbeat for node");
 
-        // Get current timestamp in seconds as i64
-        let timestamp = chrono::Utc::now().timestamp();
+        // Get current timestamp in milliseconds as i64
+        let timestamp = timestamp_ms();
 
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
@@ -113,8 +121,7 @@ impl DistCluster for PostgresCluster {
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>> {
         trace!("Fetching alive nodes");
 
-        // Calculate cutoff time in seconds as i64
-        let cutoff_time = chrono::Utc::now().timestamp() - self.heartbeat_timeout_seconds as i64;
+        let cutoff_time = self.calculate_cutoff_time();
 
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
