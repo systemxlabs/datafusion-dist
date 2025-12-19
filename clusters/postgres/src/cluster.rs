@@ -45,13 +45,14 @@ impl PostgresCluster {
                          available_memory BIGINT,
                          global_cpu_usage REAL,
                          num_running_tasks INTEGER,
-                         last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
+                         last_heartbeat TIMESTAMPTZ,
+                         UNIQUE(host, port)
                      )
                      "#,
                 &[],
             )
             .await
-            .map_err(|e| PostgresClusterError::Query(format!("Failed to create table: {}", e)))?;
+            .map_err(|e| PostgresClusterError::Query(format!("Failed to create table: {e:?}")))?;
 
         Ok(())
     }

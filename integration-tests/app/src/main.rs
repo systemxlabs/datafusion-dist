@@ -25,7 +25,7 @@ use uuid::Uuid;
 async fn main() -> Result<(), Box<dyn Error>> {
     let port = 50050u16;
 
-    let cluster = PostgresClusterBuilder::new("", 5432, "postgres", "password")
+    let cluster = PostgresClusterBuilder::new("localhost", 5432, "postgres", "password")
         .build()
         .await?;
 
