@@ -31,7 +31,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct DistPhysicalCodec {
-    runtime: DistRuntime,
+    pub runtime: DistRuntime,
 }
 
 impl PhysicalExtensionCodec for DistPhysicalCodec {

@@ -12,21 +12,45 @@ use datafusion_dist::{
     runtime::DistRuntime,
 };
 use datafusion_proto::{
-    physical_plan::{AsExecutionPlan, PhysicalExtensionCodec},
+    physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
 use futures::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::protobuf::{
-    self, SendTasksReq, SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
+use crate::{
+    codec::DistPhysicalCodec,
+    protobuf::{
+        self, SendTasksReq, SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
+    },
 };
 
 pub struct DistTonicServer {
     pub runtime: DistRuntime,
     pub ctx: SessionContext,
-    pub extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    pub composed_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+}
+
+impl DistTonicServer {
+    pub fn new(
+        runtime: DistRuntime,
+        ctx: SessionContext,
+        app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    ) -> Self {
+        let composed_extension_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
+            app_extension_codec,
+            Arc::new(DistPhysicalCodec {
+                runtime: runtime.clone(),
+            }),
+        ]));
+
+        Self {
+            runtime,
+            ctx,
+            composed_extension_codec,
+        }
+    }
 }
 
 impl DistTonicServer {
@@ -47,7 +71,7 @@ impl DistTonicServer {
                 proto.try_into_physical_plan(
                     &self.ctx,
                     &self.ctx.runtime_env(),
-                    self.extension_codec.as_ref(),
+                    self.composed_extension_codec.as_ref(),
                 )
             })?;
         Ok((stage_id, plan))

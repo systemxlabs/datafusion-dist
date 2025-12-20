@@ -68,11 +68,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     runtime.start().await;
 
-    let dist_tonic_service = DistTonicServer {
-        runtime: runtime.clone(),
-        ctx: ctx.clone(),
-        extension_codec: Arc::new(DefaultPhysicalExtensionCodec {}),
-    };
+    let dist_tonic_service = DistTonicServer::new(
+        runtime.clone(),
+        ctx.clone(),
+        Arc::new(DefaultPhysicalExtensionCodec {}),
+    );
     let dist_tonic_server = Server::builder()
         .add_service(DistTonicServiceServer::new(dist_tonic_service))
         .serve("[::]:50050".parse()?);
