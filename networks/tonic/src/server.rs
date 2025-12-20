@@ -24,7 +24,7 @@ use crate::protobuf::{
 };
 
 pub struct DistTonicServer {
-    pub runtime: Arc<DistRuntime>,
+    pub runtime: DistRuntime,
     pub ctx: SessionContext,
     pub extension_codec: Arc<dyn PhysicalExtensionCodec>,
 }

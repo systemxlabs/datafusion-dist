@@ -9,6 +9,7 @@ use crate::{
     runtime::TaskState,
 };
 
+#[derive(Debug, Clone)]
 pub struct Heartbeater {
     pub node_id: NodeId,
     pub cluster: Arc<dyn DistCluster>,

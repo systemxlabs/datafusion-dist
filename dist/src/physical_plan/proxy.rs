@@ -18,21 +18,22 @@ use crate::{
     network::DistNetwork,
     physical_plan::UnresolvedExec,
     planner::{StageId, TaskId},
+    runtime::DistRuntime,
 };
 
 #[derive(Debug)]
 pub struct ProxyExec {
-    pub network: Arc<dyn DistNetwork>,
     pub delegated_stage_id: StageId,
     pub delegated_plan: Arc<dyn ExecutionPlan>,
     pub delegated_task_distribution: HashMap<TaskId, NodeId>,
+    pub runtime: DistRuntime,
 }
 
 impl ProxyExec {
     pub fn try_from_unresolved(
         unresolved: &UnresolvedExec,
-        network: Arc<dyn DistNetwork>,
         task_distribution: &HashMap<TaskId, NodeId>,
+        runtime: DistRuntime,
     ) -> DistResult<Self> {
         let partition_count = unresolved
             .delegated_plan
@@ -49,10 +50,10 @@ impl ProxyExec {
             delegated_task_distribution.insert(task_id, node_id.clone());
         }
         Ok(ProxyExec {
-            network,
             delegated_stage_id: unresolved.delegated_stage_id,
             delegated_plan: unresolved.delegated_plan.clone(),
             delegated_task_distribution,
+            runtime,
         })
     }
 }
@@ -71,16 +72,14 @@ impl ExecutionPlan for ProxyExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.delegated_plan.children()
+        vec![]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        Err(DataFusionError::Internal(
-            "UnresolvedExec with_new_children should not be called".to_string(),
-        ))
+        Ok(self)
     }
 
     fn execute(
@@ -88,7 +87,6 @@ impl ExecutionPlan for ProxyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
-        let local_node = self.network.local_node();
         let task_id = self.delegated_stage_id.task_id(partition as u32);
         let node_id = self
             .delegated_task_distribution
@@ -100,11 +98,11 @@ impl ExecutionPlan for ProxyExec {
                 ))
             })?;
 
-        if node_id == &local_node {
+        if node_id == &self.runtime.node_id {
             self.delegated_plan.execute(partition, context)
         } else {
             let fut = get_df_batch_stream(
-                self.network.clone(),
+                self.runtime.network.clone(),
                 node_id.clone(),
                 task_id,
                 self.delegated_plan.schema(),

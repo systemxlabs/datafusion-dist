@@ -60,12 +60,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let config = DistConfig::default();
 
-    let runtime = Arc::new(DistRuntime::new(
-        ctx.clone(),
+    let runtime = DistRuntime::new(
+        ctx.task_ctx(),
         Arc::new(config),
         Arc::new(cluster),
         Arc::new(network),
-    ));
+    );
     runtime.start().await;
 
     let dist_tonic_service = DistTonicServer {
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 struct TestFlightSqlService {
     ctx: SessionContext,
-    runtime: Arc<DistRuntime>,
+    runtime: DistRuntime,
 }
 
 #[derive(::prost::Message)]

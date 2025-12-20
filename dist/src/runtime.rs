@@ -5,9 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use datafusion::{
-    arrow::array::RecordBatch, physical_plan::ExecutionPlan, prelude::SessionContext,
-};
+use datafusion::{arrow::array::RecordBatch, execution::TaskContext, physical_plan::ExecutionPlan};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -27,9 +25,10 @@ use crate::{
     util::timestamp_ms,
 };
 
+#[derive(Debug, Clone)]
 pub struct DistRuntime {
     pub node_id: NodeId,
-    pub ctx: SessionContext,
+    pub task_ctx: Arc<TaskContext>,
     pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
@@ -42,7 +41,7 @@ pub struct DistRuntime {
 
 impl DistRuntime {
     pub fn new(
-        ctx: SessionContext,
+        task_ctx: Arc<TaskContext>,
         config: Arc<DistConfig>,
         cluster: Arc<dyn DistCluster>,
         network: Arc<dyn DistNetwork>,
@@ -57,7 +56,7 @@ impl DistRuntime {
         );
         Self {
             node_id: network.local_node(),
-            ctx,
+            task_ctx,
             config,
             cluster,
             network,
@@ -102,8 +101,7 @@ impl DistRuntime {
 
         // Resolve stage plans based on task distribution
         for (_, stage_plan) in stage_plans.iter_mut() {
-            *stage_plan =
-                resolve_stage_plan(stage_plan.clone(), &task_distribution, &self.network)?;
+            *stage_plan = resolve_stage_plan(stage_plan.clone(), &task_distribution, self.clone())?;
         }
 
         let mut node_stages = HashMap::new();
@@ -185,7 +183,7 @@ impl DistRuntime {
         }
         drop(guard);
 
-        let df_stream = plan.execute(task_id.partition as usize, self.ctx.task_ctx())?;
+        let df_stream = plan.execute(task_id.partition as usize, self.task_ctx.clone())?;
         let stream = df_stream.map_err(DistError::from).boxed();
 
         let task_stream = TaskStream {

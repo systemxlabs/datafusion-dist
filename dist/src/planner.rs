@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::{
     DistResult,
     cluster::NodeId,
-    network::DistNetwork,
     physical_plan::{ProxyExec, UnresolvedExec},
+    runtime::DistRuntime,
 };
 
 pub trait DistPlanner: Debug + Send + Sync {
@@ -134,12 +134,12 @@ impl DistPlanner for DefaultPlanner {
 pub fn resolve_stage_plan(
     stage_plan: Arc<dyn ExecutionPlan>,
     task_distribution: &HashMap<TaskId, NodeId>,
-    network: &Arc<dyn DistNetwork>,
+    runtime: DistRuntime,
 ) -> DistResult<Arc<dyn ExecutionPlan>> {
     let transformed = stage_plan.transform(|node| {
         if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
             let proxy =
-                ProxyExec::try_from_unresolved(unresolved, network.clone(), task_distribution)?;
+                ProxyExec::try_from_unresolved(unresolved, task_distribution, runtime.clone())?;
             Ok(Transformed::yes(Arc::new(proxy)))
         } else {
             Ok(Transformed::no(node))
