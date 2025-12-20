@@ -2,12 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
-    common::Statistics,
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{
         DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-        execution_plan::CardinalityEffect, stream::RecordBatchStreamAdapter,
+        stream::RecordBatchStreamAdapter,
     },
 };
 use futures::TryStreamExt;
@@ -15,7 +14,6 @@ use futures::TryStreamExt;
 use crate::{
     DistError, DistResult,
     cluster::NodeId,
-    network::DistNetwork,
     physical_plan::UnresolvedExec,
     planner::{StageId, TaskId},
     runtime::DistRuntime,
@@ -24,7 +22,8 @@ use crate::{
 #[derive(Debug)]
 pub struct ProxyExec {
     pub delegated_stage_id: StageId,
-    pub delegated_plan: Arc<dyn ExecutionPlan>,
+    pub delegated_plan_name: String,
+    pub delegated_plan_properties: PlanProperties,
     pub delegated_task_distribution: HashMap<TaskId, NodeId>,
     pub runtime: DistRuntime,
 }
@@ -51,7 +50,8 @@ impl ProxyExec {
         }
         Ok(ProxyExec {
             delegated_stage_id: unresolved.delegated_stage_id,
-            delegated_plan: unresolved.delegated_plan.clone(),
+            delegated_plan_name: unresolved.delegated_plan.name().to_string(),
+            delegated_plan_properties: unresolved.delegated_plan.properties().clone(),
             delegated_task_distribution,
             runtime,
         })
@@ -68,7 +68,7 @@ impl ExecutionPlan for ProxyExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.delegated_plan.properties()
+        &self.delegated_plan_properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -85,7 +85,7 @@ impl ExecutionPlan for ProxyExec {
     fn execute(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream, DataFusionError> {
         let task_id = self.delegated_stage_id.task_id(partition as u32);
         let node_id = self
@@ -98,32 +98,23 @@ impl ExecutionPlan for ProxyExec {
                 ))
             })?;
 
-        if node_id == &self.runtime.node_id {
-            self.delegated_plan.execute(partition, context)
-        } else {
-            let fut = get_df_batch_stream(
-                self.runtime.network.clone(),
-                node_id.clone(),
-                task_id,
-                self.delegated_plan.schema(),
-            );
-            let stream = futures::stream::once(fut).try_flatten();
-            Ok(Box::pin(RecordBatchStreamAdapter::new(
-                self.delegated_plan.schema(),
-                stream,
-            )))
-        }
-    }
-
-    fn partition_statistics(
-        &self,
-        partition: Option<usize>,
-    ) -> Result<Statistics, DataFusionError> {
-        self.delegated_plan.partition_statistics(partition)
-    }
-
-    fn cardinality_effect(&self) -> CardinalityEffect {
-        self.delegated_plan.cardinality_effect()
+        let fut = get_df_batch_stream(
+            self.runtime.clone(),
+            node_id.clone(),
+            task_id,
+            self.delegated_plan_properties
+                .eq_properties
+                .schema()
+                .clone(),
+        );
+        let stream = futures::stream::once(fut).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.delegated_plan_properties
+                .eq_properties
+                .schema()
+                .clone(),
+            stream,
+        )))
     }
 }
 
@@ -137,21 +128,41 @@ impl DisplayAs for ProxyExec {
             .join(", ");
         write!(
             f,
-            "ProxyExec: delegated_stage={}, delegated_task_distribution=[{}]",
-            self.delegated_stage_id.stage, task_distribution_display
+            "ProxyExec: delegated_plan={}, delegated_stage={}, delegated_task_distribution=[{}]",
+            self.delegated_plan_name, self.delegated_stage_id.stage, task_distribution_display
         )
     }
 }
 
 async fn get_df_batch_stream(
-    network: Arc<dyn DistNetwork>,
+    runtime: DistRuntime,
     node_id: NodeId,
     task_id: TaskId,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream, DataFusionError> {
-    let stream = network
-        .execute_task(node_id, task_id)
-        .await?
-        .map_err(DataFusionError::from);
-    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    if node_id == runtime.node_id {
+        let stage_id = task_id.stage_id();
+
+        let guard = runtime.stage_plans.lock().await;
+        let plan = guard
+            .get(&stage_id)
+            .ok_or_else(|| DistError::internal(format!("Plan not found for stage {stage_id}")))?
+            .clone();
+        drop(guard);
+
+        if !runtime.tasks.lock().await.contains_key(&task_id) {
+            return Err(DataFusionError::Execution(format!(
+                "Task {task_id} not found in this node"
+            )));
+        }
+
+        plan.execute(task_id.partition as usize, runtime.task_ctx.clone())
+    } else {
+        let stream = runtime
+            .network
+            .execute_task(node_id, task_id)
+            .await?
+            .map_err(DataFusionError::from);
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
 }
