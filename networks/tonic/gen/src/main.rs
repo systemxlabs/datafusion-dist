@@ -1,7 +1,7 @@
 use std::path::Path;
 
 fn main() -> Result<(), String> {
-    let proto_path = Path::new("network_tonic.proto");
+    let proto_path = Path::new("proto/network_tonic.proto");
     let out_dir = Path::new(env!("OUT_DIR"));
 
     tonic_build::configure()
