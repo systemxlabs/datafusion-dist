@@ -116,14 +116,14 @@ async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {
     Ok(channel)
 }
 
-fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
+pub fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
     protobuf::StageId {
         job_id: stage_id.job_id.to_string(),
         stage: stage_id.stage,
     }
 }
 
-fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
+pub fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
     protobuf::TaskId {
         job_id: task_id.job_id.to_string(),
         stage: task_id.stage,

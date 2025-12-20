@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package network_tonic;
 
+import "datafusion_common.proto";
+import "datafusion.proto";
+
 service DistTonicService {
    rpc SendTasks (SendTasksReq) returns (SendTasksResp) {} 
    rpc ExecuteTask (TaskId) returns (stream RecordBatch) {}
@@ -32,4 +35,32 @@ message StagePlan {
 
 message RecordBatch {
   bytes data = 1;
+}
+
+message DistPhysicalPlanNode {
+  oneof DistPhysicalPlanType {
+    ProxyExecNode proxy = 1;
+  }
+}
+
+message ProxyExecNode {
+  StageId delegated_stage_id = 1;
+  string delegated_plan_name = 2;
+  TaskDistribution delegated_task_distribution = 3;
+  datafusion_common.Schema schema = 4;
+  datafusion.Partitioning partitioning = 5;
+}
+
+message TaskDistribution {
+  repeated TaskNode distribution = 1;
+}
+
+message TaskNode {
+  TaskId task_id = 1;
+  NodeId node_id = 2;
+}
+
+message NodeId {
+  string host = 1;
+  uint32 port = 2;
 }

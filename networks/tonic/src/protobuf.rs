@@ -36,6 +36,52 @@ pub struct RecordBatch {
     #[prost(bytes = "vec", tag = "1")]
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DistPhysicalPlanNode {
+    #[prost(oneof = "dist_physical_plan_node::DistPhysicalPlanType", tags = "1")]
+    pub dist_physical_plan_type:
+        ::core::option::Option<dist_physical_plan_node::DistPhysicalPlanType>,
+}
+/// Nested message and enum types in `DistPhysicalPlanNode`.
+pub mod dist_physical_plan_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DistPhysicalPlanType {
+        #[prost(message, tag = "1")]
+        Proxy(super::ProxyExecNode),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProxyExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub delegated_stage_id: ::core::option::Option<StageId>,
+    #[prost(string, tag = "2")]
+    pub delegated_plan_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub delegated_task_distribution: ::core::option::Option<TaskDistribution>,
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<::datafusion_proto::protobuf::Schema>,
+    #[prost(message, optional, tag = "5")]
+    pub partitioning: ::core::option::Option<::datafusion_proto::protobuf::Partitioning>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskDistribution {
+    #[prost(message, repeated, tag = "1")]
+    pub distribution: ::prost::alloc::vec::Vec<TaskNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskNode {
+    #[prost(message, optional, tag = "1")]
+    pub task_id: ::core::option::Option<TaskId>,
+    #[prost(message, optional, tag = "2")]
+    pub node_id: ::core::option::Option<NodeId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeId {
+    #[prost(string, tag = "1")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub port: u32,
+}
 /// Generated client implementations.
 pub mod dist_tonic_service_client {
     #![allow(
