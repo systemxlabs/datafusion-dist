@@ -87,11 +87,19 @@ impl DistRuntime {
         let job_id = Uuid::new_v4();
         let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
         debug!(
-            "job {job_id} stage plans:\n{}",
+            "job {job_id} initial stage plans:\n{}",
             DisplayableStagePlans(&stage_plans)
         );
 
         let node_states = self.cluster.alive_nodes().await?;
+        debug!(
+            "alive nodes: {}",
+            node_states
+                .keys()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         let task_distribution = self.scheduler.schedule(node_states, &stage_plans).await?;
         debug!(
@@ -103,6 +111,10 @@ impl DistRuntime {
         for (_, stage_plan) in stage_plans.iter_mut() {
             *stage_plan = resolve_stage_plan(stage_plan.clone(), &task_distribution, self.clone())?;
         }
+        debug!(
+            "job {job_id} final stage plans:\n{}",
+            DisplayableStagePlans(&stage_plans)
+        );
 
         let mut node_stages = HashMap::new();
         let mut node_tasks = HashMap::new();
@@ -140,6 +152,15 @@ impl DistRuntime {
             if node_id == self.node_id {
                 self.receive_tasks(scheduled_tasks).await;
             } else {
+                debug!(
+                    "Sending tasks [{}] to {node_id}",
+                    scheduled_tasks
+                        .task_ids
+                        .iter()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
                 let network = self.network.clone();
                 let handle = tokio::spawn(async move {
                     network.send_tasks(node_id.clone(), scheduled_tasks).await?;
@@ -159,6 +180,7 @@ impl DistRuntime {
             .filter(|(task_id, _)| task_id.stage_id() == stage0_id)
             .map(|(task_id, node_id)| (*task_id, node_id.clone()))
             .collect();
+
         Ok((job_id, stage0_task_distribution))
     }
 
@@ -216,7 +238,7 @@ impl DistRuntime {
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) {
         debug!(
-            "Received tasks: {} and plans of stages: {}",
+            "Received tasks: [{}] and plans of stages: [{}]",
             scheduled_tasks
                 .task_ids
                 .iter()

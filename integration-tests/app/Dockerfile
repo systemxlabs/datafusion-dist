@@ -30,7 +30,7 @@ COPY --from=builder /app/target/debug/datafusion-dist-integration-tests-app /app
 EXPOSE 50050 50051
 
 # Set environment variables
-ENV RUST_LOG=debug,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=debug
+ENV RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=debug
 
 # Run the application
 CMD ["./datafusion-dist-integration-tests-app"]

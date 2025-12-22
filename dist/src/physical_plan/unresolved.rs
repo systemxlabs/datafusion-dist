@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::{
-    common::Statistics,
     error::DataFusionError,
     execution::{SendableRecordBatchStream, TaskContext},
-    physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-        execution_plan::CardinalityEffect,
-    },
+    physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties},
 };
 
 use crate::planner::StageId;
@@ -41,7 +37,7 @@ impl ExecutionPlan for UnresolvedExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.delegated_plan.children()
+        vec![]
     }
 
     fn with_new_children(
@@ -62,24 +58,14 @@ impl ExecutionPlan for UnresolvedExec {
             "UnresolvedExec execute should not be called".to_string(),
         ))
     }
-
-    fn partition_statistics(
-        &self,
-        partition: Option<usize>,
-    ) -> Result<Statistics, DataFusionError> {
-        self.delegated_plan.partition_statistics(partition)
-    }
-
-    fn cardinality_effect(&self) -> CardinalityEffect {
-        self.delegated_plan.cardinality_effect()
-    }
 }
 
 impl DisplayAs for UnresolvedExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "UnresolvedExec: delegated_stage={}",
+            "UnresolvedExec: delegated_plan={}, delegated_stage={}",
+            self.delegated_plan.name(),
             self.delegated_stage_id.stage
         )
     }

@@ -27,7 +27,7 @@ use datafusion_dist_network_tonic::{
 };
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use futures::{Stream, StreamExt, TryStreamExt};
-use log::debug;
+use log::info;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
 use uuid::Uuid;
@@ -36,12 +36,6 @@ use crate::data::register_tables;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    unsafe {
-        std::env::set_var(
-            "RUST_LOG",
-            "debug,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=debug",
-        );
-    }
     env_logger::init();
 
     let port = 50050u16;
@@ -142,7 +136,7 @@ impl FlightSqlService for TestFlightSqlService {
         &self,
         _request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<BoxedFlightStream<HandshakeResponse>>, Status> {
-        debug!("do_handshake");
+        info!("do_handshake");
         let token = Uuid::new_v4();
 
         let result = HandshakeResponse {
@@ -165,7 +159,7 @@ impl FlightSqlService for TestFlightSqlService {
         _request: Request<Ticket>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        debug!("do_get_fallback type_url: {}", message.type_url);
+        info!("do_get_fallback type_url: {}", message.type_url);
         if !message.is::<NodeTask>() {
             Err(Status::unimplemented(format!(
                 "do_get: The defined request is invalid: {}",
@@ -187,6 +181,7 @@ impl FlightSqlService for TestFlightSqlService {
             stage: node_task.stage,
             partition: node_task.partition,
         };
+        info!("Fetching data for task {task_id} and node {node_id}");
 
         let stream = if self.runtime.node_id == node_id {
             self.runtime
@@ -219,7 +214,7 @@ impl FlightSqlService for TestFlightSqlService {
         query: CommandStatementQuery,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        debug!("get_flight_info_statement query: {}", query.query);
+        info!("get_flight_info_statement query: {}", query.query);
         let df = self
             .ctx
             .sql(&query.query)
@@ -229,7 +224,7 @@ impl FlightSqlService for TestFlightSqlService {
             .create_physical_plan()
             .await
             .map_err(|e| Status::from_error(Box::new(e)))?;
-        debug!(
+        info!(
             "Create Physical Plan: {}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
@@ -240,7 +235,7 @@ impl FlightSqlService for TestFlightSqlService {
             .submit(plan)
             .await
             .map_err(|e| Status::from_error(Box::new(e)))?;
-        debug!("Stage0 task distribution: {:?}", stage0_task_distribution);
+        info!("Stage0 task distribution: {:?}", stage0_task_distribution);
 
         let endpoints = build_flight_endpoints(stage0_task_distribution);
         let schema_bytes = schema_to_ipc(schema)?;
