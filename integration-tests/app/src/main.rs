@@ -1,5 +1,3 @@
-pub mod data;
-
 use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc};
 
 use arrow_flight::{
@@ -21,6 +19,7 @@ use datafusion::{
 };
 use datafusion_dist::{cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime};
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
+use datafusion_dist_integration_tests::data::build_session_context;
 use datafusion_dist_network_tonic::{
     network::DistTonicNetwork, protobuf::dist_tonic_service_server::DistTonicServiceServer,
     server::DistTonicServer,
@@ -31,8 +30,6 @@ use log::info;
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
 use uuid::Uuid;
-
-use crate::data::register_tables;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -48,8 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let network = DistTonicNetwork::new(port, app_extension_codec.clone());
 
-    let ctx = SessionContext::new();
-    register_tables(&ctx);
+    let ctx = build_session_context();
 
     let config = DistConfig::default();
 

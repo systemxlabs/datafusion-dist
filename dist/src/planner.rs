@@ -29,7 +29,7 @@ pub trait DistPlanner: Debug + Send + Sync {
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StageId {
     pub job_id: Uuid,
     pub stage: u32,
@@ -51,7 +51,7 @@ impl Display for StageId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TaskId {
     pub job_id: Uuid,
     pub stage: u32,
@@ -154,7 +154,7 @@ impl Display for DisplayableStagePlans<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (stage_id, plan) in self.0.iter() {
             writeln!(f, "===============Stage {}===============", stage_id.stage)?;
-            writeln!(
+            write!(
                 f,
                 "{}",
                 DisplayableExecutionPlan::new(plan.as_ref()).indent(true)

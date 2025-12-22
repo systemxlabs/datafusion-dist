@@ -1119,6 +1119,7 @@ dependencies = [
  "futures",
  "tokio",
  "tonic",
+ "uuid",
 ]
 
 [[package]]
@@ -1129,6 +1130,7 @@ dependencies = [
  "datafusion",
  "datafusion-dist",
  "datafusion-dist-cluster-postgres",
+ "datafusion-dist-integration-tests",
  "datafusion-dist-network-tonic",
  "datafusion-proto",
  "env_logger",

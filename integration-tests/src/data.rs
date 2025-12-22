@@ -10,6 +10,12 @@ use datafusion::{
     prelude::SessionContext,
 };
 
+pub fn build_session_context() -> SessionContext {
+    let ctx = SessionContext::new();
+    register_tables(&ctx);
+    ctx
+}
+
 pub fn register_tables(ctx: &SessionContext) {
     register_simple_table(ctx);
 }

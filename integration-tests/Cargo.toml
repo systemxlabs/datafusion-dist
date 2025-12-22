@@ -17,3 +17,4 @@ datafusion = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 tonic = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }

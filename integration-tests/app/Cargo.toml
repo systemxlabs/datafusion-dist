@@ -11,6 +11,7 @@ publish = false
 datafusion-dist = { workspace = true }
 datafusion-dist-cluster-postgres = { workspace = true }
 datafusion-dist-network-tonic = { workspace = true }
+datafusion-dist-integration-tests = { workspace = true }
 
 arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
 env_logger = { workspace = true }

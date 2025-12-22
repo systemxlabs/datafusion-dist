@@ -20,6 +20,7 @@ repository = "https://github.com/systemxlabs/datafusion-dist"
 datafusion-dist = { path = "dist", version = "0.1.0" }
 datafusion-dist-cluster-postgres = { path = "clusters/postgres", version = "0.1.0" }
 datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.1.0" }
+datafusion-dist-integration-tests = { path = "integration-tests", version = "0.1.0" }
 
 arrow-flight = "56"
 async-trait = "0.1"
