@@ -39,9 +39,11 @@ impl DistTonicServer {
         app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
     ) -> Self {
         let composed_extension_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
-            app_extension_codec,
+            app_extension_codec.clone(),
             Arc::new(DistPhysicalCodec {
                 runtime: runtime.clone(),
+                ctx: ctx.clone(),
+                app_extension_codec,
             }),
         ]));
 

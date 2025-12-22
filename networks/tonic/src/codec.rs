@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -29,9 +29,19 @@ use crate::{
     server::{parse_stage_id, parse_task_id},
 };
 
-#[derive(Debug)]
 pub struct DistPhysicalCodec {
     pub runtime: DistRuntime,
+    pub ctx: SessionContext,
+    pub app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+}
+
+impl Debug for DistPhysicalCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DistPhysicalCodec")
+            .field("runtime", &self.runtime)
+            .field("app_extension_codec", &self.app_extension_codec)
+            .finish()
+    }
 }
 
 impl PhysicalExtensionCodec for DistPhysicalCodec {
@@ -66,9 +76,9 @@ impl PhysicalExtensionCodec for DistPhysicalCodec {
                 let delegated_plan_schema: SchemaRef = Arc::new(convert_required!(proto.schema)?);
                 let partitioning = parse_protobuf_partitioning(
                     proto.partitioning.as_ref(),
-                    &SessionContext::new(),
+                    &self.ctx,
                     &delegated_plan_schema,
-                    self,
+                    self.app_extension_codec.as_ref(),
                 )?
                 .expect("partition is none");
 
