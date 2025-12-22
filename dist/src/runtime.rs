@@ -173,9 +173,14 @@ impl DistRuntime {
         drop(guard);
 
         let mut guard = self.tasks.lock().await;
-        if let Some(task_stage) = guard.get_mut(&task_id) {
-            task_stage.running = true;
-            task_stage.start_at = timestamp_ms();
+        if let Some(task_state) = guard.get_mut(&task_id) {
+            if task_state.running {
+                return Err(DistError::internal(format!(
+                    "Task {task_id} is already running"
+                )));
+            }
+            task_state.running = true;
+            task_state.start_at = timestamp_ms();
         } else {
             return Err(DistError::internal(format!(
                 "Task {task_id} not found in this node"

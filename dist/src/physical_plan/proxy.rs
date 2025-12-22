@@ -9,7 +9,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
     },
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::{
     DistError, DistResult,
@@ -140,29 +140,11 @@ async fn get_df_batch_stream(
     task_id: TaskId,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream, DataFusionError> {
-    if node_id == runtime.node_id {
-        let stage_id = task_id.stage_id();
-
-        let guard = runtime.stage_plans.lock().await;
-        let plan = guard
-            .get(&stage_id)
-            .ok_or_else(|| DistError::internal(format!("Plan not found for stage {stage_id}")))?
-            .clone();
-        drop(guard);
-
-        if !runtime.tasks.lock().await.contains_key(&task_id) {
-            return Err(DataFusionError::Execution(format!(
-                "Task {task_id} not found in this node"
-            )));
-        }
-
-        plan.execute(task_id.partition as usize, runtime.task_ctx.clone())
+    let dist_stream = if node_id == runtime.node_id {
+        runtime.execute_local(task_id).await?
     } else {
-        let stream = runtime
-            .network
-            .execute_task(node_id, task_id)
-            .await?
-            .map_err(DataFusionError::from);
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
-    }
+        runtime.execute_remote(node_id, task_id).await?
+    };
+    let df_stream = dist_stream.map_err(DataFusionError::from).boxed();
+    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, df_stream)))
 }
