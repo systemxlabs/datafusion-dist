@@ -20,7 +20,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::{
-    codec::DistPhysicalCodec,
+    codec::DistPhysicalExtensionDecoder,
     protobuf::{
         self, SendTasksReq, SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
     },
@@ -40,7 +40,7 @@ impl DistTonicServer {
     ) -> Self {
         let composed_extension_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
             app_extension_codec.clone(),
-            Arc::new(DistPhysicalCodec {
+            Arc::new(DistPhysicalExtensionDecoder {
                 runtime: runtime.clone(),
                 ctx: ctx.clone(),
                 app_extension_codec,

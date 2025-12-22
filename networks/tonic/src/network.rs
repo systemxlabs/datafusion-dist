@@ -12,7 +12,7 @@ use datafusion_dist::{
     util::get_local_ip,
 };
 use datafusion_proto::{
-    physical_plan::{AsExecutionPlan, PhysicalExtensionCodec},
+    physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
 use futures::StreamExt;
@@ -21,14 +21,30 @@ use tonic::{
     transport::{Channel, Endpoint},
 };
 
-use crate::protobuf::{
-    self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient,
+use crate::{
+    codec::DistPhysicalExtensionEncoder,
+    protobuf::{self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient},
 };
 
 #[derive(Debug)]
 pub struct DistTonicNetwork {
     pub port: u16,
-    pub extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    pub composed_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+}
+
+impl DistTonicNetwork {
+    pub fn new(port: u16, app_extension_codec: Arc<dyn PhysicalExtensionCodec>) -> Self {
+        let composed_extension_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
+            app_extension_codec.clone(),
+            Arc::new(DistPhysicalExtensionEncoder {
+                app_extension_codec,
+            }),
+        ]));
+        Self {
+            port,
+            composed_extension_codec,
+        }
+    }
 }
 
 impl DistTonicNetwork {
@@ -60,7 +76,7 @@ impl DistTonicNetwork {
         let proto_stage_id = serialize_stage_id(stage_id);
         let mut plan_buf: Vec<u8> = vec![];
         let plan_proto =
-            PhysicalPlanNode::try_from_physical_plan(plan, self.extension_codec.as_ref())?;
+            PhysicalPlanNode::try_from_physical_plan(plan, self.composed_extension_codec.as_ref())?;
         plan_proto.try_encode(&mut plan_buf)?;
         Ok(StagePlan {
             stage_id: Some(proto_stage_id),

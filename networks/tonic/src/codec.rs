@@ -29,13 +29,67 @@ use crate::{
     server::{parse_stage_id, parse_task_id},
 };
 
-pub struct DistPhysicalCodec {
+#[derive(Debug)]
+pub struct DistPhysicalExtensionEncoder {
+    pub app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+}
+
+impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "DistPhysicalExtensionEncoder::try_decode is not implemented".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        if let Some(exec) = node.as_any().downcast_ref::<ProxyExec>() {
+            let proto_stage_id = serialize_stage_id(exec.delegated_stage_id);
+            let proto_partitioning = serialize_partitioning(
+                &exec.delegated_plan_properties.partitioning,
+                self.app_extension_codec.as_ref(),
+            )?;
+            let proto_task_distribution =
+                serialize_task_distribution(&exec.delegated_task_distribution);
+
+            let proto = DistPhysicalPlanNode {
+                dist_physical_plan_type: Some(DistPhysicalPlanType::Proxy(ProxyExecNode {
+                    delegated_stage_id: Some(proto_stage_id),
+                    delegated_plan_name: exec.delegated_plan_name.clone(),
+                    delegated_task_distribution: Some(proto_task_distribution),
+                    schema: Some(exec.schema().as_ref().try_into()?),
+                    partitioning: Some(proto_partitioning),
+                })),
+            };
+            proto.encode(buf).map_err(|e| {
+                DataFusionError::Internal(format!("failed to encode proxy exec plan: {e:?}"))
+            })?;
+
+            Ok(())
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "DistPhysicalExtensionEncoder does not support plan {}",
+                node.name()
+            )))
+        }
+    }
+}
+
+pub struct DistPhysicalExtensionDecoder {
     pub runtime: DistRuntime,
     pub ctx: SessionContext,
     pub app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
 }
 
-impl Debug for DistPhysicalCodec {
+impl Debug for DistPhysicalExtensionDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DistPhysicalCodec")
             .field("runtime", &self.runtime)
@@ -44,7 +98,7 @@ impl Debug for DistPhysicalCodec {
     }
 }
 
-impl PhysicalExtensionCodec for DistPhysicalCodec {
+impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
     fn try_decode(
         &self,
         buf: &[u8],
@@ -105,34 +159,12 @@ impl PhysicalExtensionCodec for DistPhysicalCodec {
 
     fn try_encode(
         &self,
-        node: Arc<dyn ExecutionPlan>,
-        buf: &mut Vec<u8>,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        if let Some(exec) = node.as_any().downcast_ref::<ProxyExec>() {
-            let proto_stage_id = serialize_stage_id(exec.delegated_stage_id);
-            let proto_partitioning =
-                serialize_partitioning(&exec.delegated_plan_properties.partitioning, self)?;
-            let proto_task_distribution =
-                serialize_task_distribution(&exec.delegated_task_distribution);
-
-            let proto = ProxyExecNode {
-                delegated_stage_id: Some(proto_stage_id),
-                delegated_plan_name: exec.delegated_plan_name.clone(),
-                delegated_task_distribution: Some(proto_task_distribution),
-                schema: Some(exec.schema().as_ref().try_into()?),
-                partitioning: Some(proto_partitioning),
-            };
-            proto.encode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to encode proxy exec plan: {e:?}"))
-            })?;
-
-            Ok(())
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "DistPhysical does not support plan {}",
-                node.name()
-            )))
-        }
+        Err(DataFusionError::NotImplemented(
+            "DistPhysicalExtensionDecoder::try_encode is not implemented".to_string(),
+        ))
     }
 }
 

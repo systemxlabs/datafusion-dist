@@ -44,10 +44,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()
         .await?;
 
-    let network = DistTonicNetwork {
-        port,
-        extension_codec: Arc::new(DefaultPhysicalExtensionCodec {}),
-    };
+    let app_extension_codec = Arc::new(DefaultPhysicalExtensionCodec {});
+
+    let network = DistTonicNetwork::new(port, app_extension_codec.clone());
 
     let ctx = SessionContext::new();
     register_tables(&ctx);
@@ -62,11 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     runtime.start().await;
 
-    let dist_tonic_service = DistTonicServer::new(
-        runtime.clone(),
-        ctx.clone(),
-        Arc::new(DefaultPhysicalExtensionCodec {}),
-    );
+    let dist_tonic_service =
+        DistTonicServer::new(runtime.clone(), ctx.clone(), app_extension_codec.clone());
     let dist_tonic_server = Server::builder()
         .add_service(DistTonicServiceServer::new(dist_tonic_service))
         .serve("[::]:50050".parse()?);

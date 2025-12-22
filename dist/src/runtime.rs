@@ -196,11 +196,6 @@ impl DistRuntime {
 
         let mut guard = self.tasks.lock().await;
         if let Some(task_state) = guard.get_mut(&task_id) {
-            if task_state.running {
-                return Err(DistError::internal(format!(
-                    "Task {task_id} is already running"
-                )));
-            }
             task_state.running = true;
             task_state.start_at = timestamp_ms();
         } else {
@@ -210,6 +205,7 @@ impl DistRuntime {
         }
         drop(guard);
 
+        debug!("Executing local task {task_id}");
         let df_stream = plan.execute(task_id.partition as usize, self.task_ctx.clone())?;
         let stream = df_stream.map_err(DistError::from).boxed();
 
@@ -233,6 +229,8 @@ impl DistRuntime {
                 "remote node id {node_id} is actually self"
             )));
         }
+
+        debug!("Executing remote task {task_id} on node {node_id}");
         self.network.execute_task(node_id, task_id).await
     }
 
