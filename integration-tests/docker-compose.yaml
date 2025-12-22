@@ -25,6 +25,8 @@ services:
     ports:
       - "50060:50050"
       - "50061:50051"
+    environment:
+      - RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=info
 
   integration-tests-app1:
     image: datafusion-dist-integration-tests-app
@@ -35,6 +37,8 @@ services:
     ports:
       - "50070:50050"
       - "50071:50051"
+    environment:
+      - RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=info
 
   integration-tests-app2:
     image: datafusion-dist-integration-tests-app
@@ -45,3 +49,5 @@ services:
     ports:
       - "50080:50050"
       - "50081:50051"
+    environment:
+      - RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=info
