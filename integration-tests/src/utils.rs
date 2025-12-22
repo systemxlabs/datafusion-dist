@@ -1,12 +1,46 @@
-use std::{collections::BTreeMap, fmt::Display, sync::Arc};
+use std::{collections::BTreeMap, error::Error, fmt::Display, sync::Arc};
 
-use datafusion::physical_plan::{ExecutionPlan, display::DisplayableExecutionPlan};
+use arrow_flight::sql::client::FlightSqlServiceClient;
+use datafusion::{
+    arrow::{array::RecordBatch, util::pretty::pretty_format_batches},
+    physical_plan::{ExecutionPlan, display::DisplayableExecutionPlan},
+};
 use datafusion_dist::planner::{DefaultPlanner, DistPlanner, StageId};
+use futures::TryStreamExt;
+use tonic::transport::Endpoint;
 use uuid::Uuid;
 
 use crate::data::build_session_context;
 
-pub async fn assert_planner_output(sql: &str, expected_stage_plans: &str) {
+pub async fn assert_e2e(sql: &str, expected_result: &str) {
+    let batches = execute_e2e_query(sql).await.unwrap();
+    let batches_str = pretty_format_batches(&batches).unwrap().to_string();
+    println!("Actual result: {batches_str}");
+    assert_eq!(batches_str, expected_result,);
+}
+
+pub async fn execute_e2e_query(sql: &str) -> Result<Vec<RecordBatch>, Box<dyn Error>> {
+    let endpoint = Endpoint::from_static("http://localhost:50061");
+    let channel = endpoint.connect().await?;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+
+    let flight_info = flight_sql_client.execute(sql.to_string(), None).await?;
+
+    let mut batches = Vec::new();
+    for endpoint in flight_info.endpoint {
+        let ticket = endpoint
+            .ticket
+            .as_ref()
+            .expect("ticket is required")
+            .clone();
+        let stream = flight_sql_client.do_get(ticket).await?;
+        let result: Vec<RecordBatch> = stream.try_collect().await?;
+        batches.extend(result);
+    }
+    Ok(batches)
+}
+
+pub async fn assert_planner(sql: &str, expected_stage_plans: &str) {
     let ctx = build_session_context();
     let plan = ctx
         .sql(sql)

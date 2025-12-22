@@ -1,8 +1,8 @@
-use datafusion_dist_integration_tests::utils::assert_planner_output;
+use datafusion_dist_integration_tests::utils::assert_planner;
 
 #[tokio::test]
 async fn join_planning() {
-    assert_planner_output(
+    assert_planner(
         "select * from simple as t1 join simple as t2",
         r#"===============Stage 0===============
 CrossJoinExec
