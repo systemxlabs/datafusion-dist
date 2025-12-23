@@ -5,7 +5,11 @@ use std::{
     task::{Context, Poll},
 };
 
-use datafusion::{arrow::array::RecordBatch, execution::TaskContext, physical_plan::ExecutionPlan};
+use datafusion::{
+    arrow::array::RecordBatch,
+    execution::{SendableRecordBatchStream, TaskContext},
+    physical_plan::ExecutionPlan,
+};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -22,7 +26,6 @@ use crate::{
         DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,
     },
     schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
-    util::timestamp_ms,
 };
 
 #[derive(Debug, Clone)]
@@ -35,8 +38,7 @@ pub struct DistRuntime {
     pub planner: Arc<dyn DistPlanner>,
     pub scheduler: Arc<dyn DistSchedule>,
     pub heartbeater: Arc<Heartbeater>,
-    pub stage_plans: Arc<Mutex<HashMap<StageId, Arc<dyn ExecutionPlan>>>>,
-    pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
+    pub stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
 }
 
 impl DistRuntime {
@@ -47,11 +49,11 @@ impl DistRuntime {
         network: Arc<dyn DistNetwork>,
     ) -> Self {
         let node_id = network.local_node();
-        let tasks = Arc::new(Mutex::new(HashMap::new()));
+        let stages = Arc::new(Mutex::new(HashMap::new()));
         let heartbeater = Heartbeater::new(
             node_id.clone(),
             cluster.clone(),
-            tasks.clone(),
+            stages.clone(),
             config.heartbeat_interval,
         );
         Self {
@@ -63,8 +65,7 @@ impl DistRuntime {
             planner: Arc::new(DefaultPlanner),
             scheduler: Arc::new(RoundRobinScheduler),
             heartbeater: Arc::new(heartbeater),
-            stage_plans: Arc::new(Mutex::new(HashMap::new())),
-            tasks,
+            stages,
         }
     }
 
@@ -150,7 +151,7 @@ impl DistRuntime {
             let scheduled_tasks = ScheduledTasks::new(node_stage_plans, tasks);
 
             if node_id == self.node_id {
-                self.receive_tasks(scheduled_tasks).await;
+                self.receive_tasks(scheduled_tasks).await?;
             } else {
                 debug!(
                     "Sending tasks [{}] to {node_id}",
@@ -187,32 +188,21 @@ impl DistRuntime {
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
         let stage_id = task_id.stage_id();
 
-        let guard = self.stage_plans.lock().await;
-        let plan = guard
+        let guard = self.stages.lock().await;
+        let stage_state = guard
             .get(&stage_id)
-            .ok_or_else(|| DistError::internal(format!("Plan not found for stage {stage_id}")))?
+            .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?
             .clone();
         drop(guard);
 
-        let mut guard = self.tasks.lock().await;
-        if let Some(task_state) = guard.get_mut(&task_id) {
-            task_state.running = true;
-            task_state.start_at = timestamp_ms();
-        } else {
-            return Err(DistError::internal(format!(
-                "Task {task_id} not found in this node"
-            )));
-        }
-        drop(guard);
-
-        debug!("Executing local task {task_id}");
-        let df_stream = plan.execute(task_id.partition as usize, self.task_ctx.clone())?;
+        let df_stream = stage_state
+            .execute(task_id.partition as usize, self.task_ctx.clone())
+            .await?;
         let stream = df_stream.map_err(DistError::from).boxed();
 
         let task_stream = TaskStream {
             task_id,
-            tasks: self.tasks.clone(),
-            stage_plans: self.stage_plans.clone(),
+            stage_state,
             stream,
         };
 
@@ -234,7 +224,7 @@ impl DistRuntime {
         self.network.execute_task(node_id, task_id).await
     }
 
-    pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) {
+    pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
         debug!(
             "Received tasks: [{}] and plans of stages: [{}]",
             scheduled_tasks
@@ -250,31 +240,112 @@ impl DistRuntime {
                 .collect::<Vec<String>>()
                 .join(", ")
         );
-        let mut guard = self.stage_plans.lock().await;
-        guard.extend(scheduled_tasks.stage_plans);
-        let mut guard = self.tasks.lock().await;
-        let task_state = TaskState {
-            running: false,
-            create_at: timestamp_ms(),
-            start_at: 0,
-        };
-        for task_id in scheduled_tasks.task_ids {
-            guard.insert(task_id, task_state.clone());
-        }
+        let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
+        let mut guard = self.stages.lock().await;
+        guard.extend(stage_states);
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TaskState {
-    pub running: bool,
-    pub create_at: i64,
-    pub start_at: i64,
+#[derive(Debug)]
+pub struct StageState {
+    stage_id: StageId,
+    stage_plan: Arc<dyn ExecutionPlan>,
+    assigned_partitions: HashSet<usize>,
+    task_sets: Mutex<Vec<TaskSet>>,
+}
+
+impl StageState {
+    pub fn from_scheduled_tasks(
+        tasks: ScheduledTasks,
+    ) -> DistResult<HashMap<StageId, Arc<StageState>>> {
+        let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
+        for task_id in tasks.task_ids {
+            let stage_id = task_id.stage_id();
+            stage_tasks
+                .entry(stage_id)
+                .or_insert_with(HashSet::new)
+                .insert(task_id);
+        }
+
+        let mut stage_states = HashMap::new();
+        for (stage_id, assigned_task_ids) in stage_tasks {
+            let stage_state = StageState {
+                stage_id,
+                stage_plan: tasks
+                    .stage_plans
+                    .get(&stage_id)
+                    .ok_or_else(|| {
+                        DistError::internal(format!("Not found plan of stage {stage_id}"))
+                    })?
+                    .clone(),
+                assigned_partitions: assigned_task_ids
+                    .iter()
+                    .map(|task_id| task_id.partition as usize)
+                    .collect(),
+                task_sets: Mutex::new(Vec::new()),
+            };
+            stage_states.insert(stage_id, Arc::new(stage_state));
+        }
+        Ok(stage_states)
+    }
+
+    pub async fn num_running_tasks(&self) -> usize {
+        let guard = self.task_sets.lock().await;
+        guard
+            .iter()
+            .map(|task_set| task_set.running_partitions.len())
+            .sum()
+    }
+
+    pub async fn execute(
+        &self,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> DistResult<SendableRecordBatchStream> {
+        if !self.assigned_partitions.contains(&partition) {
+            let task_id = self.stage_id.task_id(partition as u32);
+            return Err(DistError::internal(format!(
+                "Task {task_id} not found in this node"
+            )));
+        }
+
+        let mut guard = self.task_sets.lock().await;
+        for task_set in guard.iter_mut() {
+            if !task_set.executed_partitions.contains(&partition) {
+                task_set.executed_partitions.insert(partition);
+                task_set.running_partitions.insert(partition);
+
+                let df_stream = task_set.shared_plan.execute(partition, task_ctx)?;
+                return Ok(df_stream);
+            }
+        }
+
+        let mut new_task_set = TaskSet {
+            shared_plan: self.stage_plan.clone().reset_state()?,
+            executed_partitions: HashSet::new(),
+            running_partitions: HashSet::new(),
+        };
+        new_task_set.executed_partitions.insert(partition);
+        new_task_set.running_partitions.insert(partition);
+        let df_stream = new_task_set.shared_plan.execute(partition, task_ctx)?;
+
+        guard.push(new_task_set);
+
+        Ok(df_stream)
+    }
+}
+
+#[derive(Debug)]
+pub struct TaskSet {
+    pub shared_plan: Arc<dyn ExecutionPlan>,
+    pub executed_partitions: HashSet<usize>,
+    pub running_partitions: HashSet<usize>,
 }
 
 pub struct TaskStream {
     pub task_id: TaskId,
-    pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
-    pub stage_plans: Arc<Mutex<HashMap<StageId, Arc<dyn ExecutionPlan>>>>,
+    pub stage_state: Arc<StageState>,
     pub stream: RecordBatchStream,
 }
 

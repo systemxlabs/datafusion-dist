@@ -45,7 +45,6 @@ impl PostgresCluster {
                          free_memory BIGINT NOT NULL,
                          available_memory BIGINT NOT NULL,
                          global_cpu_usage FLOAT4 NOT NULL,
-                         num_ready_tasks INTEGER NOT NULL,
                          num_running_tasks INTEGER NOT NULL,
                          last_heartbeat BIGINT NOT NULL,
                          UNIQUE(host, port)
@@ -81,8 +80,8 @@ impl DistCluster for PostgresCluster {
         let query = r#"
                    INSERT INTO cluster_nodes (
                        host, port, total_memory, used_memory, free_memory,
-                       available_memory, global_cpu_usage, num_ready_tasks, num_running_tasks, last_heartbeat
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                       available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                    ON CONFLICT (host, port)
                    DO UPDATE SET
                        total_memory = EXCLUDED.total_memory,
@@ -90,9 +89,8 @@ impl DistCluster for PostgresCluster {
                        free_memory = EXCLUDED.free_memory,
                        available_memory = EXCLUDED.available_memory,
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
-                       num_ready_tasks = EXCLUDED.num_ready_tasks,
                        num_running_tasks = EXCLUDED.num_running_tasks,
-                       last_heartbeat = $10
+                       last_heartbeat = $9
                    "#;
 
         client
@@ -106,7 +104,6 @@ impl DistCluster for PostgresCluster {
                     &(state.free_memory as i64),
                     &(state.available_memory as i64),
                     &state.global_cpu_usage,
-                    &(state.num_ready_tasks as i32),
                     &(state.num_running_tasks as i32),
                     &timestamp,
                 ],
@@ -132,7 +129,7 @@ impl DistCluster for PostgresCluster {
                         .query(
                             r#"
                             SELECT host, port, total_memory, used_memory,
-                                   free_memory, available_memory, global_cpu_usage, num_ready_tasks, num_running_tasks
+                                   free_memory, available_memory, global_cpu_usage, num_running_tasks
                             FROM cluster_nodes
                             WHERE last_heartbeat >= $1
                             "#,
@@ -175,12 +172,8 @@ impl DistCluster for PostgresCluster {
                 global_cpu_usage: row
                     .try_get(6)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
-                num_ready_tasks: row
-                    .try_get::<_, i32>(7)
-                    .map_err(|e| PostgresClusterError::Query(e.to_string()))?
-                    as u32,
                 num_running_tasks: row
-                    .try_get::<_, i32>(8)
+                    .try_get::<_, i32>(7)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u32,
             };

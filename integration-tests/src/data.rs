@@ -7,11 +7,12 @@ use datafusion::{
         record_batch::RecordBatch,
     },
     datasource::MemTable,
-    prelude::SessionContext,
+    prelude::{SessionConfig, SessionContext},
 };
 
 pub fn build_session_context() -> SessionContext {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_target_partitions(12);
+    let ctx = SessionContext::new_with_config(config);
     register_tables(&ctx);
     ctx
 }

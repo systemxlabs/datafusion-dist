@@ -93,7 +93,10 @@ impl DistTonicService for DistTonicServer {
         let scheduled_tasks = self
             .parse_send_tasks_req(request.into_inner())
             .map_err(|e| Status::internal(format!("Failed to parse SendTasksReq: {e}")))?;
-        self.runtime.receive_tasks(scheduled_tasks).await;
+        self.runtime
+            .receive_tasks(scheduled_tasks)
+            .await
+            .map_err(|e| Status::from_error(Box::new(e)))?;
         Ok(Response::new(SendTasksResp {}))
     }
 

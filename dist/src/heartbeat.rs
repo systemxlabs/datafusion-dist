@@ -5,15 +5,15 @@ use tokio::sync::Mutex;
 
 use crate::{
     cluster::{DistCluster, NodeId, NodeState},
-    planner::TaskId,
-    runtime::TaskState,
+    planner::StageId,
+    runtime::StageState,
 };
 
 #[derive(Debug, Clone)]
 pub struct Heartbeater {
     pub node_id: NodeId,
     pub cluster: Arc<dyn DistCluster>,
-    pub tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
+    pub stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
     pub heartbeat_interval: Duration,
 }
 
@@ -21,13 +21,13 @@ impl Heartbeater {
     pub fn new(
         node_id: NodeId,
         cluster: Arc<dyn DistCluster>,
-        tasks: Arc<Mutex<HashMap<TaskId, TaskState>>>,
+        stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
         heartbeat_interval: Duration,
     ) -> Self {
         Heartbeater {
             node_id,
             cluster,
-            tasks,
+            stages,
             heartbeat_interval,
         }
     }
@@ -35,24 +35,18 @@ impl Heartbeater {
     pub fn start(&self) {
         let node_id = self.node_id.clone();
         let cluster = self.cluster.clone();
-        let tasks = self.tasks.clone();
+        let stages = self.stages.clone();
         let heartbeat_interval = self.heartbeat_interval;
 
         tokio::spawn(async move {
             let mut sys = sysinfo::System::new();
 
             loop {
-                let guard = tasks.lock().await;
-                let (num_ready_tasks, num_running_tasks) =
-                    guard
-                        .iter()
-                        .fold((0u32, 0u32), |(ready, running), (_, state)| {
-                            if state.running {
-                                (ready, running + 1)
-                            } else {
-                                (ready + 1, running)
-                            }
-                        });
+                let guard = stages.lock().await;
+                let mut num_running_tasks = 0;
+                for (_, state) in guard.iter() {
+                    num_running_tasks += state.num_running_tasks().await;
+                }
                 drop(guard);
 
                 sys.refresh_memory();
@@ -64,8 +58,7 @@ impl Heartbeater {
                     free_memory: sys.free_memory(),
                     available_memory: sys.available_memory(),
                     global_cpu_usage: sys.global_cpu_usage(),
-                    num_ready_tasks,
-                    num_running_tasks,
+                    num_running_tasks: num_running_tasks as u32,
                 };
                 if let Err(e) = cluster.heartbeat(node_id.clone(), node_state).await {
                     error!("Failed to send heartbeat: {e}");
