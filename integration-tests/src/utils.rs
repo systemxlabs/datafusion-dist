@@ -49,6 +49,11 @@ pub async fn assert_planner(sql: &str, expected_stage_plans: &str) {
         .create_physical_plan()
         .await
         .unwrap();
+    println!(
+        "Physical plan: {}",
+        DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+    );
+
     let dist_planner = DefaultPlanner {};
     let stage_plans = dist_planner.plan_stages(Uuid::new_v4(), plan).unwrap();
     let stage_plans = stage_plans.into_iter().collect::<BTreeMap<_, _>>();

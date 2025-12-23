@@ -1,4 +1,4 @@
-query II rowsort
+query TITI rowsort
 select * from simple as t1 join simple as t2
 ----
 Alice 25 Alice 25
