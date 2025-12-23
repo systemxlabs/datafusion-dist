@@ -262,10 +262,7 @@ impl StageState {
         let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
         for task_id in tasks.task_ids {
             let stage_id = task_id.stage_id();
-            stage_tasks
-                .entry(stage_id)
-                .or_insert_with(HashSet::new)
-                .insert(task_id);
+            stage_tasks.entry(stage_id).or_default().insert(task_id);
         }
 
         let mut stage_states = HashMap::new();
