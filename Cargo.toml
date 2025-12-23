@@ -35,7 +35,7 @@ tonic = "0.13"
 tonic-build = "0.13"
 serde = "1.0"
 sqllogictest = "0.29.0"
-sqllogictest-flightsql = { git = "https://github.com/systemxlabs/sqllogictest-flightsql.git", rev = "f61679dd55ef2da570ffd82dcaa2d7b3e75e6887" }
+sqllogictest-flightsql = "0.1.0"
 sysinfo = "0.37"
 tokio = "1"
 uuid = "1.18"
