@@ -1,11 +1,11 @@
-use std::{collections::BTreeMap, error::Error, fmt::Display, sync::Arc};
+use std::error::Error;
 
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use datafusion::{
     arrow::{array::RecordBatch, util::pretty::pretty_format_batches},
-    physical_plan::{ExecutionPlan, display::DisplayableExecutionPlan},
+    physical_plan::display::DisplayableExecutionPlan,
 };
-use datafusion_dist::planner::{DefaultPlanner, DistPlanner, StageId};
+use datafusion_dist::planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner};
 use futures::TryStreamExt;
 use tonic::transport::Endpoint;
 use uuid::Uuid;
@@ -56,24 +56,7 @@ pub async fn assert_planner(sql: &str, expected_stage_plans: &str) {
 
     let dist_planner = DefaultPlanner {};
     let stage_plans = dist_planner.plan_stages(Uuid::new_v4(), plan).unwrap();
-    let stage_plans = stage_plans.into_iter().collect::<BTreeMap<_, _>>();
-    let actual = TestDisplayableStagePlans(&stage_plans).to_string();
+    let actual = DisplayableStagePlans(&stage_plans).to_string();
     println!("Planner output: {actual}");
     assert_eq!(actual, expected_stage_plans);
-}
-
-pub struct TestDisplayableStagePlans<'a>(pub &'a BTreeMap<StageId, Arc<dyn ExecutionPlan>>);
-
-impl Display for TestDisplayableStagePlans<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (stage_id, plan) in self.0.iter() {
-            writeln!(f, "===============Stage {}===============", stage_id.stage)?;
-            write!(
-                f,
-                "{}",
-                DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-            )?;
-        }
-        Ok(())
-    }
 }

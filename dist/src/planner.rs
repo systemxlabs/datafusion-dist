@@ -11,6 +11,7 @@ use datafusion::{
         display::DisplayableExecutionPlan, repartition::RepartitionExec,
     },
 };
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -152,7 +153,7 @@ pub struct DisplayableStagePlans<'a>(pub &'a HashMap<StageId, Arc<dyn ExecutionP
 
 impl Display for DisplayableStagePlans<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (stage_id, plan) in self.0.iter() {
+        for (stage_id, plan) in self.0.iter().sorted_by_key(|(stage_id, _)| *stage_id) {
             writeln!(f, "===============Stage {}===============", stage_id.stage)?;
             write!(
                 f,

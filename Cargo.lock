@@ -1367,6 +1367,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "futures",
+ "itertools 0.14.0",
  "local-ip-address",
  "log",
  "serde",
