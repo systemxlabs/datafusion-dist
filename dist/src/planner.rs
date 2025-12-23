@@ -12,6 +12,7 @@ use datafusion::{
     },
 };
 use itertools::Itertools;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -83,6 +84,8 @@ impl DistPlanner for DefaultPlanner {
         job_id: Uuid,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>> {
+        let plan = merge_adjacent_repartition_exec(plan)?;
+
         let mut stage_count = 0u32;
         let plan = plan
             .transform_up(|node| {
@@ -146,6 +149,58 @@ pub fn resolve_stage_plan(
             Ok(Transformed::no(node))
         }
     })?;
+    Ok(transformed.data)
+}
+
+/// Merges adjacent RepartitionExec nodes into a single RepartitionExec.
+///
+/// When two RepartitionExec nodes are directly adjacent (parent-child relationship),
+/// the inner RepartitionExec (e.g., RoundRobinBatch) is redundant and can be removed.
+/// The outer RepartitionExec's partitioning strategy is preserved.
+///
+/// For example, this transforms:
+/// ```text
+/// RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=12
+///   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=4
+///     SomeExec
+/// ```
+/// Into:
+/// ```text
+/// RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=4
+///   SomeExec
+/// ```
+pub fn merge_adjacent_repartition_exec(
+    plan: Arc<dyn ExecutionPlan>,
+) -> DistResult<Arc<dyn ExecutionPlan>> {
+    let transformed = plan.transform_down(|node| {
+        // Check if current node is a RepartitionExec
+        if let Some(outer_repartition) = node.as_any().downcast_ref::<RepartitionExec>() {
+            let outer_input = outer_repartition.input();
+
+            // Check if the child is also a RepartitionExec
+            if let Some(inner_repartition) = outer_input.as_any().downcast_ref::<RepartitionExec>()
+            {
+                // Get the grandchild (the input to the inner RepartitionExec)
+                let grandchild = inner_repartition.input().clone();
+
+                // Create a new RepartitionExec with:
+                // - The outer's partitioning strategy
+                // - The grandchild as input (skipping the inner RepartitionExec)
+                let merged_repartition =
+                    RepartitionExec::try_new(grandchild, outer_repartition.partitioning().clone())?;
+
+                debug!(
+                    "Merged adjacent RepartitionExec nodes: outer={:?}, inner={:?}",
+                    outer_repartition.partitioning(),
+                    inner_repartition.partitioning()
+                );
+
+                return Ok(Transformed::yes(Arc::new(merged_repartition)));
+            }
+        }
+        Ok(Transformed::no(node))
+    })?;
+
     Ok(transformed.data)
 }
 

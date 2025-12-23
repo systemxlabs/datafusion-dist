@@ -4,7 +4,7 @@ pub mod utils;
 
 use std::sync::OnceLock;
 
-use crate::{docker::DockerCompose, utils::execute_e2e_query};
+use crate::{docker::DockerCompose, utils::execute_flightsql_query};
 
 static CONTAINERS: OnceLock<DockerCompose> = OnceLock::new();
 
@@ -18,10 +18,10 @@ pub async fn setup_containers() {
 
     let mut retry = 0;
     loop {
-        match execute_e2e_query("select 1").await {
+        match execute_flightsql_query("select 1").await {
             Ok(_) => break,
             Err(err) => {
-                eprintln!("e2e healthy check (select 1) failed: {err:?}");
+                eprintln!("flightsql healthy check (select 1) failed: {err:?}");
             }
         }
         retry += 1;

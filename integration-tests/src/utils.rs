@@ -12,14 +12,14 @@ use uuid::Uuid;
 
 use crate::data::build_session_context;
 
-pub async fn assert_e2e(sql: &str, expected_result: &str) {
-    let batches = execute_e2e_query(sql).await.unwrap();
+pub async fn assert_flightsql(sql: &str, expected_result: &str) {
+    let batches = execute_flightsql_query(sql).await.unwrap();
     let batches_str = pretty_format_batches(&batches).unwrap().to_string();
     println!("Actual result: {batches_str}");
     assert_eq!(batches_str, expected_result,);
 }
 
-pub async fn execute_e2e_query(sql: &str) -> Result<Vec<RecordBatch>, Box<dyn Error>> {
+pub async fn execute_flightsql_query(sql: &str) -> Result<Vec<RecordBatch>, Box<dyn Error>> {
     let endpoint = Endpoint::from_static("http://localhost:50061");
     let channel = endpoint.connect().await?;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
