@@ -1,20 +1,14 @@
 use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc};
 
 use arrow_flight::{
-    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, SchemaAsIpc,
-    Ticket,
+    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
     encode::FlightDataEncoderBuilder,
     error::FlightError,
-    flight_descriptor::DescriptorType,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{Any, CommandStatementQuery, ProstMessageExt, SqlInfo, server::FlightSqlService},
 };
 use datafusion::{
-    arrow::{
-        datatypes::SchemaRef,
-        ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
-    },
-    physical_plan::display::DisplayableExecutionPlan,
+    arrow::ipc::writer::IpcWriteOptions, physical_plan::display::DisplayableExecutionPlan,
     prelude::SessionContext,
 };
 use datafusion_dist::{cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime};
@@ -230,22 +224,14 @@ impl FlightSqlService for TestFlightSqlService {
         info!("Stage0 task distribution: {:?}", stage0_task_distribution);
 
         let endpoints = build_flight_endpoints(stage0_task_distribution);
-        let schema_bytes = schema_to_ipc(schema)?;
-        let flight_desc = FlightDescriptor {
-            r#type: DescriptorType::Cmd.into(),
-            cmd: Vec::new().into(),
-            path: vec![],
-        };
 
-        let info = FlightInfo {
-            schema: schema_bytes.into(),
-            flight_descriptor: Some(flight_desc),
-            endpoint: endpoints,
-            total_records: -1,
-            total_bytes: -1,
-            ordered: false,
-            app_metadata: Default::default(),
-        };
+        let mut info = FlightInfo::new()
+            .try_with_schema(&schema)
+            .map_err(|e| Status::from_error(Box::new(e)))?;
+        for endpoint in endpoints {
+            info = info.with_endpoint(endpoint);
+        }
+
         Ok(Response::new(info))
     }
 
@@ -269,18 +255,4 @@ fn build_flight_endpoints(task_distribution: HashMap<TaskId, NodeId>) -> Vec<Fli
         endpoints.push(endpoint);
     }
     endpoints
-}
-
-#[allow(clippy::result_large_err)]
-fn schema_to_ipc(schema: SchemaRef) -> Result<Vec<u8>, Status> {
-    let options = IpcWriteOptions::default();
-    let pair = SchemaAsIpc::new(&schema, &options);
-    let data_gen = IpcDataGenerator::default();
-    let mut dictionary_tracker = DictionaryTracker::new(true);
-    let encoded_data =
-        data_gen.schema_to_bytes_with_dictionary_tracker(pair.0, &mut dictionary_tracker, pair.1);
-    let mut schema_bytes = vec![];
-    datafusion::arrow::ipc::writer::write_message(&mut schema_bytes, encoded_data, pair.1)
-        .map_err(|e| Status::internal(format!("Error encoding schema: {e}")))?;
-    Ok(schema_bytes)
 }
