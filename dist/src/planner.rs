@@ -7,7 +7,7 @@ use std::{
 use datafusion::{
     common::tree_node::{Transformed, TreeNode},
     physical_plan::{
-        ExecutionPlan, coalesce_partitions::CoalescePartitionsExec,
+        ExecutionPlan, ExecutionPlanProperties, coalesce_partitions::CoalescePartitionsExec,
         display::DisplayableExecutionPlan, repartition::RepartitionExec,
     },
 };
@@ -209,7 +209,12 @@ pub struct DisplayableStagePlans<'a>(pub &'a HashMap<StageId, Arc<dyn ExecutionP
 impl Display for DisplayableStagePlans<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (stage_id, plan) in self.0.iter().sorted_by_key(|(stage_id, _)| *stage_id) {
-            writeln!(f, "===============Stage {}===============", stage_id.stage)?;
+            writeln!(
+                f,
+                "===============Stage {} (partitions={})===============",
+                stage_id.stage,
+                plan.output_partitioning().partition_count()
+            )?;
             write!(
                 f,
                 "{}",

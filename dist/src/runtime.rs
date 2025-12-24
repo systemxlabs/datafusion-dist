@@ -122,6 +122,16 @@ impl DistRuntime {
             "job {job_id} task distribution: {}",
             DisplayableTaskDistribution(&task_distribution)
         );
+        let stage0_task_distribution: HashMap<TaskId, NodeId> = task_distribution
+            .iter()
+            .filter(|(task_id, _)| task_id.stage == 0)
+            .map(|(task_id, node_id)| (*task_id, node_id.clone()))
+            .collect();
+        if stage0_task_distribution.is_empty() {
+            return Err(DistError::internal(format!(
+                "Not found stage0 task distribution in {task_distribution:?} for job {job_id}"
+            )));
+        }
 
         // Resolve stage plans based on task distribution
         for (_, stage_plan) in stage_plans.iter_mut() {
@@ -189,13 +199,6 @@ impl DistRuntime {
         for handle in handles {
             handle.await??;
         }
-
-        let stage0_id = StageId { job_id, stage: 0 };
-        let stage0_task_distribution: HashMap<TaskId, NodeId> = task_distribution
-            .iter()
-            .filter(|(task_id, _)| task_id.stage_id() == stage0_id)
-            .map(|(task_id, node_id)| (*task_id, node_id.clone()))
-            .collect();
 
         Ok((job_id, stage0_task_distribution))
     }
