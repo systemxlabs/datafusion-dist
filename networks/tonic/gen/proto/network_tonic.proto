@@ -40,7 +40,7 @@ message RecordBatch {
 }
 
 message GetJobStatusReq {
-  string job_id = 1;
+  optional string job_id = 1;
 }
 
 message GetJobStatusResp {

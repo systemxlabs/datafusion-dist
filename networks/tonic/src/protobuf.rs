@@ -38,8 +38,8 @@ pub struct RecordBatch {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusReq {
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "1")]
+    pub job_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusResp {

@@ -123,13 +123,13 @@ impl DistNetwork for DistTonicNetwork {
     async fn get_job_status(
         &self,
         node_id: NodeId,
-        job_id: Uuid,
+        job_id: Option<Uuid>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
         let channel = build_tonic_channel(node_id).await?;
         let mut tonic_client = DistTonicServiceClient::new(channel);
 
         let req = protobuf::GetJobStatusReq {
-            job_id: job_id.to_string(),
+            job_id: job_id.map(|id| id.to_string()),
         };
 
         let resp = tonic_client

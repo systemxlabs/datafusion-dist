@@ -85,7 +85,7 @@ pub async fn check_job_completed(
     job_id: Uuid,
 ) -> DistResult<Option<bool>> {
     // First, get local status
-    let mut combined_status = local_job_status(local_stages, job_id).await;
+    let mut combined_status = local_job_status(local_stages, Some(job_id)).await;
 
     // Then, get status from all other alive nodes
     let node_states = cluster.alive_nodes().await?;
@@ -97,7 +97,8 @@ pub async fn check_job_completed(
         if *node_id != local_node_id {
             let network = network.clone();
             let node_id = node_id.clone();
-            let handle = tokio::spawn(async move { network.get_job_status(node_id, job_id).await });
+            let handle =
+                tokio::spawn(async move { network.get_job_status(node_id, Some(job_id)).await });
             handles.push(handle);
         }
     }
@@ -141,13 +142,13 @@ pub async fn check_job_completed(
 
 pub async fn local_job_status(
     stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
-    job_id: Uuid,
+    job_id: Option<Uuid>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock().await;
 
     let mut result = HashMap::new();
     for (stage_id, stage_state) in guard.iter() {
-        if stage_id.job_id == job_id {
+        if job_id.is_none() || stage_id.job_id == job_id.unwrap() {
             let stage_info = StageInfo::from_stage_state(stage_state).await;
             result.insert(*stage_id, stage_info);
         }

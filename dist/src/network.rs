@@ -28,7 +28,7 @@ pub trait DistNetwork: Debug + Send + Sync {
     async fn get_job_status(
         &self,
         node_id: NodeId,
-        job_id: Uuid,
+        job_id: Option<Uuid>,
     ) -> DistResult<HashMap<StageId, StageInfo>>;
 
     async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()>;

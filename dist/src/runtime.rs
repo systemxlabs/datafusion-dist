@@ -21,7 +21,7 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
-    event::{Event, EventHandler, check_job_completed, local_job_status, start_event_handler},
+    event::{Event, EventHandler, local_job_status, start_event_handler},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{
@@ -263,11 +263,7 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub async fn is_job_completed(&self, job_id: Uuid) -> DistResult<Option<bool>> {
-        check_job_completed(&self.cluster, &self.network, &self.stages, job_id).await
-    }
-
-    pub async fn get_local_job_status(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
+    pub async fn get_local_job_status(&self, job_id: Option<Uuid>) -> HashMap<StageId, StageInfo> {
         local_job_status(&self.stages, job_id).await
     }
 
@@ -275,6 +271,77 @@ impl DistRuntime {
         debug!("Cleaning up local Job {job_id}");
         let mut guard = self.stages.lock().await;
         guard.retain(|stage_id, _| stage_id.job_id != job_id);
+    }
+
+    pub async fn get_all_jobs(&self) -> DistResult<Vec<JobOverview>> {
+        // First, get local status for all jobs
+        let mut combined_status = self.get_local_job_status(None).await;
+
+        // Then, get status from all other alive nodes
+        let node_states = self.cluster.alive_nodes().await?;
+
+        let mut handles = Vec::new();
+        for node_id in node_states.keys() {
+            if *node_id != self.node_id {
+                let network = self.network.clone();
+                let node_id = node_id.clone();
+                let handle =
+                    tokio::spawn(async move { network.get_job_status(node_id, None).await });
+                handles.push(handle);
+            }
+        }
+
+        for handle in handles {
+            let remote_status = handle.await??;
+            for (stage_id, remote_stage_info) in remote_status {
+                combined_status
+                    .entry(stage_id)
+                    .and_modify(|existing| {
+                        existing
+                            .assigned_partitions
+                            .extend(&remote_stage_info.assigned_partitions);
+                        existing
+                            .task_set_infos
+                            .extend(remote_stage_info.task_set_infos.clone());
+                    })
+                    .or_insert(remote_stage_info);
+            }
+        }
+
+        // Aggregate stats by job_id
+        let mut job_stats: HashMap<Uuid, (usize, usize)> = HashMap::new();
+
+        for (stage_id, stage_info) in combined_status {
+            let running: usize = stage_info
+                .task_set_infos
+                .iter()
+                .map(|ts| ts.running_partitions.len())
+                .sum();
+            let completed: usize = stage_info
+                .task_set_infos
+                .iter()
+                .map(|ts| ts.completed_partitions.len())
+                .sum();
+
+            job_stats
+                .entry(stage_id.job_id)
+                .and_modify(|(r, c)| {
+                    *r += running;
+                    *c += completed;
+                })
+                .or_insert((running, completed));
+        }
+
+        Ok(job_stats
+            .into_iter()
+            .map(
+                |(job_id, (num_running_tasks, num_completed_tasks))| JobOverview {
+                    job_id,
+                    num_running_tasks,
+                    num_completed_tasks,
+                },
+            )
+            .collect())
     }
 }
 
@@ -449,4 +516,10 @@ impl Drop for TaskStream {
             }
         });
     }
+}
+
+pub struct JobOverview {
+    pub job_id: Uuid,
+    pub num_running_tasks: usize,
+    pub num_completed_tasks: usize,
 }
