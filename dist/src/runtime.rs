@@ -62,6 +62,7 @@ impl DistRuntime {
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(1024);
         let event_handler = EventHandler {
+            local_node: node_id.clone(),
             cluster: cluster.clone(),
             network: network.clone(),
             local_stages: stages.clone(),
@@ -262,12 +263,18 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub async fn is_job_completed(&self, job_id: Uuid) -> DistResult<bool> {
+    pub async fn is_job_completed(&self, job_id: Uuid) -> DistResult<Option<bool>> {
         check_job_completed(&self.cluster, &self.network, &self.stages, job_id).await
     }
 
     pub async fn get_local_job_status(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
         local_job_status(&self.stages, job_id).await
+    }
+
+    pub async fn cleanup_local_job(&self, job_id: Uuid) {
+        debug!("Cleaning up local Job {job_id}");
+        let mut guard = self.stages.lock().await;
+        guard.retain(|stage_id, _| stage_id.job_id != job_id);
     }
 }
 

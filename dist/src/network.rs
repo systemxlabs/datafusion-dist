@@ -30,6 +30,8 @@ pub trait DistNetwork: Debug + Send + Sync {
         node_id: NodeId,
         job_id: Uuid,
     ) -> DistResult<HashMap<StageId, StageInfo>>;
+
+    async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()>;
 }
 
 pub struct ScheduledTasks {

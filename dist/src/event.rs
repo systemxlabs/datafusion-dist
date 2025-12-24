@@ -5,8 +5,8 @@ use tokio::sync::{Mutex, mpsc::Receiver};
 use uuid::Uuid;
 
 use crate::{
-    DistError, DistResult,
-    cluster::DistCluster,
+    DistResult,
+    cluster::{DistCluster, NodeId},
     network::{DistNetwork, StageInfo},
     planner::StageId,
     runtime::StageState,
@@ -24,6 +24,7 @@ pub fn start_event_handler(mut handler: EventHandler) {
 }
 
 pub struct EventHandler {
+    pub local_node: NodeId,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
     pub local_stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
@@ -44,10 +45,32 @@ impl EventHandler {
 
     async fn handle_try_cleanup_job(&mut self, job_id: Uuid) {
         match check_job_completed(&self.cluster, &self.network, &self.local_stages, job_id).await {
-            Ok(true) => {
-                // TODO remove job from cluster
+            Ok(Some(true)) => {
+                debug!("Job {job_id} completed, removeing it from cluster");
+                let alive_nodes = match self.cluster.alive_nodes().await {
+                    Ok(nodes) => nodes,
+                    Err(err) => {
+                        error!("Failed to get alive nodes: {err}");
+                        return;
+                    }
+                };
+
+                for node_id in alive_nodes.keys() {
+                    if node_id == &self.local_node {
+                        let mut guard = self.local_stages.lock().await;
+                        guard.retain(|stage_id, _| stage_id.job_id != job_id);
+                        drop(guard);
+                    } else {
+                        // Send cleanup request to remote node
+                        if let Err(err) = self.network.cleanup_job(node_id.clone(), job_id).await {
+                            error!(
+                                "Failed to send cleanup job {job_id} request to node {node_id}: {err}"
+                            );
+                        }
+                    }
+                }
             }
-            Ok(false) => {}
+            Ok(_) => {}
             Err(err) => {
                 error!("Failed to check job {job_id} completed: {err}");
             }
@@ -60,7 +83,7 @@ pub async fn check_job_completed(
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
     job_id: Uuid,
-) -> DistResult<bool> {
+) -> DistResult<Option<bool>> {
     // First, get local status
     let mut combined_status = local_job_status(local_stages, job_id).await;
 
@@ -99,10 +122,7 @@ pub async fn check_job_completed(
     let stage0 = StageId { job_id, stage: 0 };
 
     let Some(stage0_info) = combined_status.get(&stage0) else {
-        return Err(DistError::internal(format!(
-            "Stage0 task status not found in {:?}",
-            combined_status.keys().collect::<Vec<_>>()
-        )));
+        return Ok(None);
     };
 
     // Check if all assigned partitions are completed
@@ -112,11 +132,11 @@ pub async fn check_job_completed(
             .iter()
             .any(|ts| ts.completed_partitions.contains(partition));
         if !is_completed {
-            return Ok(false);
+            return Ok(Some(false));
         }
     }
 
-    Ok(true)
+    Ok(Some(true))
 }
 
 pub async fn local_job_status(

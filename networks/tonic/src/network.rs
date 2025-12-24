@@ -152,6 +152,22 @@ impl DistNetwork for DistTonicNetwork {
 
         Ok(result)
     }
+
+    async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()> {
+        let channel = build_tonic_channel(node_id).await?;
+        let mut tonic_client = DistTonicServiceClient::new(channel);
+
+        let req = protobuf::CleanupJobReq {
+            job_id: job_id.to_string(),
+        };
+
+        tonic_client
+            .cleanup_job(req)
+            .await
+            .map_err(|e| DistError::network(Box::new(e)))?;
+
+        Ok(())
+    }
 }
 
 async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {

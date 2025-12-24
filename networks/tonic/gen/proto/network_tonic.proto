@@ -9,6 +9,7 @@ service DistTonicService {
    rpc SendTasks (SendTasksReq) returns (SendTasksResp) {}
    rpc ExecuteTask (TaskId) returns (stream RecordBatch) {}
    rpc GetJobStatus (GetJobStatusReq) returns (GetJobStatusResp) {}
+   rpc CleanupJob (CleanupJobReq) returns (CleanupJobResp) {}
 }
 
 message SendTasksReq {
@@ -56,6 +57,12 @@ message TaskSetInfo {
   repeated uint32 running_partitions = 1;
   repeated uint32 completed_partitions = 2;
 }
+
+message CleanupJobReq {
+  string job_id = 1;
+}
+
+message CleanupJobResp {}
 
 message DistPhysicalPlanNode {
   oneof DistPhysicalPlanType {

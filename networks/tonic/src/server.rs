@@ -15,8 +15,8 @@ use uuid::Uuid;
 use crate::{
     codec::DistPhysicalExtensionDecoder,
     protobuf::{
-        self, GetJobStatusReq, GetJobStatusResp, SendTasksReq, SendTasksResp, StagePlan,
-        dist_tonic_service_server::DistTonicService,
+        self, CleanupJobReq, CleanupJobResp, GetJobStatusReq, GetJobStatusResp, SendTasksReq,
+        SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
     },
     serde::{parse_stage_id, parse_task_id, serialize_record_batch_result, serialize_stage_info},
 };
@@ -123,5 +123,17 @@ impl DistTonicService for DistTonicServer {
             .collect();
 
         Ok(Response::new(GetJobStatusResp { stage_infos }))
+    }
+
+    async fn cleanup_job(
+        &self,
+        request: Request<CleanupJobReq>,
+    ) -> Result<Response<CleanupJobResp>, Status> {
+        let job_id = Uuid::parse_str(&request.into_inner().job_id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
+
+        self.runtime.cleanup_local_job(job_id).await;
+
+        Ok(Response::new(CleanupJobResp {}))
     }
 }
