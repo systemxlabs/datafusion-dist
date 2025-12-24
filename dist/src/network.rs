@@ -62,7 +62,7 @@ impl StageInfo {
             .lock()
             .await
             .iter()
-            .map(|task_set| TaskSetInfo::from_task_set(task_set))
+            .map(TaskSetInfo::from_task_set)
             .collect();
 
         StageInfo {

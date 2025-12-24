@@ -434,12 +434,11 @@ impl Drop for TaskStream {
                 && stage_state
                     .assigned_partitions_executed_at_least_once()
                     .await
+                && let Err(e) = sender.send(Event::TryCleanupJob(task_id.job_id)).await
             {
-                if let Err(e) = sender.send(Event::TryCleanupJob(task_id.job_id)).await {
-                    error!(
-                        "Failed to send TryCleanupJob event after task {task_id} stream dropped: {e}"
-                    );
-                }
+                error!(
+                    "Failed to send TryCleanupJob event after task {task_id} stream dropped: {e}"
+                );
             }
         });
     }
