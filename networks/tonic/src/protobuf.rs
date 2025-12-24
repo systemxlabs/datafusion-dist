@@ -37,6 +37,32 @@ pub struct RecordBatch {
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetJobStatusReq {
+    #[prost(string, tag = "1")]
+    pub job_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetJobStatusResp {
+    #[prost(message, repeated, tag = "1")]
+    pub stage_infos: ::prost::alloc::vec::Vec<StageInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StageInfo {
+    #[prost(message, optional, tag = "1")]
+    pub stage_id: ::core::option::Option<StageId>,
+    #[prost(uint32, repeated, tag = "2")]
+    pub assigned_partitions: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "3")]
+    pub task_set_infos: ::prost::alloc::vec::Vec<TaskSetInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskSetInfo {
+    #[prost(uint32, repeated, tag = "1")]
+    pub running_partitions: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, tag = "2")]
+    pub completed_partitions: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistPhysicalPlanNode {
     #[prost(oneof = "dist_physical_plan_node::DistPhysicalPlanType", tags = "1")]
     pub dist_physical_plan_type:
@@ -209,6 +235,24 @@ pub mod dist_tonic_service_client {
             ));
             self.inner.server_streaming(req, path, codec).await
         }
+        pub async fn get_job_status(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetJobStatusReq>,
+        ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status> {
+            self.inner.ready().await.map_err(|e| {
+                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
+            })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/network_tonic.DistTonicService/GetJobStatus",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "network_tonic.DistTonicService",
+                "GetJobStatus",
+            ));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -237,6 +281,10 @@ pub mod dist_tonic_service_server {
             &self,
             request: tonic::Request<super::TaskId>,
         ) -> std::result::Result<tonic::Response<Self::ExecuteTaskStream>, tonic::Status>;
+        async fn get_job_status(
+            &self,
+            request: tonic::Request<super::GetJobStatusReq>,
+        ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct DistTonicServiceServer<T> {
@@ -386,6 +434,47 @@ pub mod dist_tonic_service_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/network_tonic.DistTonicService/GetJobStatus" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetJobStatusSvc<T: DistTonicService>(pub Arc<T>);
+                    impl<T: DistTonicService> tonic::server::UnaryService<super::GetJobStatusReq>
+                        for GetJobStatusSvc<T>
+                    {
+                        type Response = super::GetJobStatusResp;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetJobStatusReq>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DistTonicService>::get_job_status(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetJobStatusSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

@@ -22,11 +22,10 @@ use datafusion_proto::{physical_plan::to_proto::serialize_partitioning, protobuf
 use prost::Message;
 
 use crate::{
-    network::{serialize_stage_id, serialize_task_id},
     protobuf::{
         self, DistPhysicalPlanNode, ProxyExecNode, dist_physical_plan_node::DistPhysicalPlanType,
     },
-    server::{parse_stage_id, parse_task_id},
+    serde::{parse_stage_id, parse_task_id, serialize_stage_id, serialize_task_id},
 };
 
 #[derive(Debug)]

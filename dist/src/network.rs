@@ -1,11 +1,17 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use datafusion::physical_plan::ExecutionPlan;
+use uuid::Uuid;
 
 use crate::{
     DistResult, RecordBatchStream,
     cluster::NodeId,
     planner::{StageId, TaskId},
+    runtime::{StageState, TaskSet},
 };
 
 #[async_trait::async_trait]
@@ -18,6 +24,12 @@ pub trait DistNetwork: Debug + Send + Sync {
     // Execute task plan
     async fn execute_task(&self, node_id: NodeId, task_id: TaskId)
     -> DistResult<RecordBatchStream>;
+
+    async fn get_job_status(
+        &self,
+        node_id: NodeId,
+        job_id: Uuid,
+    ) -> DistResult<HashMap<StageId, StageInfo>>;
 }
 
 pub struct ScheduledTasks {
@@ -33,6 +45,44 @@ impl ScheduledTasks {
         ScheduledTasks {
             stage_plans,
             task_ids,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StageInfo {
+    pub assigned_partitions: HashSet<usize>,
+    pub task_set_infos: Vec<TaskSetInfo>,
+}
+
+impl StageInfo {
+    pub async fn from_stage_state(stage_state: &StageState) -> Self {
+        let task_set_infos = stage_state
+            .task_sets
+            .lock()
+            .await
+            .iter()
+            .map(|task_set| TaskSetInfo::from_task_set(task_set))
+            .collect();
+
+        StageInfo {
+            assigned_partitions: stage_state.assigned_partitions.clone(),
+            task_set_infos,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskSetInfo {
+    pub running_partitions: HashSet<usize>,
+    pub completed_partitions: HashSet<usize>,
+}
+
+impl TaskSetInfo {
+    pub fn from_task_set(task_set: &TaskSet) -> Self {
+        TaskSetInfo {
+            running_partitions: task_set.running_partitions.clone(),
+            completed_partitions: task_set.completed_partitions.clone(),
         }
     }
 }

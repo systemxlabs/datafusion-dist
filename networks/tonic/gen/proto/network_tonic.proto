@@ -6,8 +6,9 @@ import "datafusion_common.proto";
 import "datafusion.proto";
 
 service DistTonicService {
-   rpc SendTasks (SendTasksReq) returns (SendTasksResp) {} 
+   rpc SendTasks (SendTasksReq) returns (SendTasksResp) {}
    rpc ExecuteTask (TaskId) returns (stream RecordBatch) {}
+   rpc GetJobStatus (GetJobStatusReq) returns (GetJobStatusResp) {}
 }
 
 message SendTasksReq {
@@ -35,6 +36,25 @@ message StagePlan {
 
 message RecordBatch {
   bytes data = 1;
+}
+
+message GetJobStatusReq {
+  string job_id = 1;
+}
+
+message GetJobStatusResp {
+  repeated StageInfo stage_infos = 1;
+}
+
+message StageInfo {
+  StageId stage_id = 1;
+  repeated uint32 assigned_partitions = 2;
+  repeated TaskSetInfo task_set_infos = 3;
+}
+
+message TaskSetInfo {
+  repeated uint32 running_partitions = 1;
+  repeated uint32 completed_partitions = 2;
 }
 
 message DistPhysicalPlanNode {

@@ -1,15 +1,8 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 
-use datafusion::{
-    arrow::{array::RecordBatch, ipc::writer::StreamWriter},
-    physical_plan::ExecutionPlan,
-    prelude::SessionContext,
-};
+use datafusion::{physical_plan::ExecutionPlan, prelude::SessionContext};
 use datafusion_dist::{
-    DistResult,
-    network::ScheduledTasks,
-    planner::{StageId, TaskId},
-    runtime::DistRuntime,
+    DistResult, network::ScheduledTasks, planner::StageId, runtime::DistRuntime,
 };
 use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
@@ -22,8 +15,10 @@ use uuid::Uuid;
 use crate::{
     codec::DistPhysicalExtensionDecoder,
     protobuf::{
-        self, SendTasksReq, SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
+        self, GetJobStatusReq, GetJobStatusResp, SendTasksReq, SendTasksResp, StagePlan,
+        dist_tonic_service_server::DistTonicService,
     },
+    serde::{parse_stage_id, parse_task_id, serialize_record_batch_result, serialize_stage_info},
 };
 
 pub struct DistTonicServer {
@@ -112,41 +107,21 @@ impl DistTonicService for DistTonicServer {
             stream.map(serialize_record_batch_result).boxed(),
         ))
     }
-}
 
-pub fn parse_stage_id(proto: protobuf::StageId) -> StageId {
-    let job_id = Uuid::parse_str(&proto.job_id)
-        .unwrap_or_else(|_| panic!("Failed to parse job id {} as uuid", proto.job_id));
-    StageId {
-        job_id,
-        stage: proto.stage,
+    async fn get_job_status(
+        &self,
+        request: Request<GetJobStatusReq>,
+    ) -> Result<Response<GetJobStatusResp>, Status> {
+        let job_id = Uuid::parse_str(&request.into_inner().job_id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
+
+        let status = self.runtime.get_local_job_status(job_id).await;
+
+        let stage_infos = status
+            .into_iter()
+            .map(|(stage_id, stage_info)| serialize_stage_info(stage_id, stage_info))
+            .collect();
+
+        Ok(Response::new(GetJobStatusResp { stage_infos }))
     }
-}
-
-pub fn parse_task_id(proto: protobuf::TaskId) -> TaskId {
-    let job_id = Uuid::parse_str(&proto.job_id)
-        .unwrap_or_else(|_| panic!("Failed to parse job id {} as uuid", proto.job_id));
-    TaskId {
-        job_id,
-        stage: proto.stage,
-        partition: proto.partition,
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn serialize_record_batch_result(
-    batch_res: DistResult<RecordBatch>,
-) -> Result<protobuf::RecordBatch, Status> {
-    let batch = batch_res.map_err(|e| Status::from_error(Box::new(e)))?;
-
-    let mut data = vec![];
-    let mut writer = StreamWriter::try_new(&mut data, batch.schema_ref())
-        .map_err(|e| Status::internal(format!("Failed to build stream writer: {e}")))?;
-    writer.write(&batch).map_err(|e| {
-        Status::internal(format!("Failed to write batch through stream writer: {e}"))
-    })?;
-    writer
-        .finish()
-        .map_err(|e| Status::internal(format!("Failed to finish stream writer: {e}")))?;
-    Ok(protobuf::RecordBatch { data })
 }

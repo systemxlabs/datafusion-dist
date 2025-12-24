@@ -1,13 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use datafusion::{
-    arrow::{self, array::RecordBatch, error::ArrowError, ipc::reader::StreamReader},
-    physical_plan::ExecutionPlan,
-};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_dist::{
     DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
-    network::{DistNetwork, ScheduledTasks},
+    network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{StageId, TaskId},
     util::get_local_ip,
 };
@@ -16,14 +13,16 @@ use datafusion_proto::{
     protobuf::PhysicalPlanNode,
 };
 use futures::StreamExt;
-use tonic::{
-    Status,
-    transport::{Channel, Endpoint},
-};
+use tonic::transport::{Channel, Endpoint};
+use uuid::Uuid;
 
 use crate::{
     codec::DistPhysicalExtensionEncoder,
     protobuf::{self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient},
+    serde::{
+        parse_record_batch_res, parse_stage_id, parse_stage_info, serialize_stage_id,
+        serialize_task_id,
+    },
 };
 
 #[derive(Debug)]
@@ -120,6 +119,39 @@ impl DistNetwork for DistTonicNetwork {
             .map_err(|e| DistError::network(Box::new(e)))?;
         Ok(stream.into_inner().map(parse_record_batch_res).boxed())
     }
+
+    async fn get_job_status(
+        &self,
+        node_id: NodeId,
+        job_id: Uuid,
+    ) -> DistResult<HashMap<StageId, StageInfo>> {
+        let channel = build_tonic_channel(node_id).await?;
+        let mut tonic_client = DistTonicServiceClient::new(channel);
+
+        let req = protobuf::GetJobStatusReq {
+            job_id: job_id.to_string(),
+        };
+
+        let resp = tonic_client
+            .get_job_status(req)
+            .await
+            .map_err(|e| DistError::network(Box::new(e)))?
+            .into_inner();
+
+        let mut result = HashMap::new();
+        for proto_stage_info in resp.stage_infos {
+            let stage_id = parse_stage_id(
+                proto_stage_info
+                    .stage_id
+                    .clone()
+                    .ok_or_else(|| DistError::internal("Missing stage_id in StageInfo"))?,
+            );
+            let stage_info = parse_stage_info(proto_stage_info);
+            result.insert(stage_id, stage_info);
+        }
+
+        Ok(result)
+    }
 }
 
 async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {
@@ -130,35 +162,4 @@ async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {
         .await
         .map_err(|e| DistError::network(Box::new(e)))?;
     Ok(channel)
-}
-
-pub fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
-    protobuf::StageId {
-        job_id: stage_id.job_id.to_string(),
-        stage: stage_id.stage,
-    }
-}
-
-pub fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
-    protobuf::TaskId {
-        job_id: task_id.job_id.to_string(),
-        stage: task_id.stage,
-        partition: task_id.partition,
-    }
-}
-
-fn parse_record_batch_res(
-    proto_res: Result<protobuf::RecordBatch, Status>,
-) -> DistResult<RecordBatch> {
-    let proto_batch = proto_res.map_err(|e| DistError::network(Box::new(e)))?;
-    let reader = StreamReader::try_new(proto_batch.data.as_slice(), None)?;
-    let mut batches = reader.into_iter().collect::<Result<Vec<_>, ArrowError>>()?;
-    if batches.len() == 1 {
-        return Ok(batches.remove(0));
-    }
-    let first_batch = batches
-        .first()
-        .ok_or_else(|| DistError::internal("No batch found in stream reader"))?;
-    let batch = arrow::compute::concat_batches(first_batch.schema_ref(), &batches)?;
-    Ok(batch)
 }
