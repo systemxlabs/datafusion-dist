@@ -25,7 +25,8 @@ use crate::{
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{
-        DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,
+        DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId,
+        check_initial_stage_plans, resolve_stage_plan,
     },
     schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
     util::timestamp_ms,
@@ -110,6 +111,7 @@ impl DistRuntime {
             "job {job_id} initial stage plans:\n{}",
             DisplayableStagePlans(&stage_plans)
         );
+        check_initial_stage_plans(job_id, &stage_plans)?;
 
         let node_states = self.cluster.alive_nodes().await?;
         debug!(

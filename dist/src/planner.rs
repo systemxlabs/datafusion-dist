@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Display},
     sync::Arc,
 };
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    DistResult,
+    DistError, DistResult,
     cluster::NodeId,
     physical_plan::{ProxyExec, UnresolvedExec},
     runtime::DistRuntime,
@@ -133,6 +133,45 @@ impl DistPlanner for DefaultPlanner {
 
         Ok(stage_plans)
     }
+}
+
+pub fn check_initial_stage_plans(
+    job_id: Uuid,
+    stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
+) -> DistResult<()> {
+    if stage_plans.is_empty() {
+        return Err(DistError::internal("Stage plans cannot be empty"));
+    }
+
+    // Check that stage 0 exists
+    let stage0 = StageId { job_id, stage: 0 };
+    if !stage_plans.contains_key(&stage0) {
+        return Err(DistError::internal("Stage 0 must exist in stage plans"));
+    }
+
+    // Collect all stage IDs that are depended upon by other stages
+    let mut depended_stages: HashSet<StageId> = HashSet::new();
+
+    for (_, plan) in stage_plans.iter() {
+        plan.apply(|node| {
+            if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
+                depended_stages.insert(unresolved.delegated_stage_id);
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+    }
+
+    // Check that every stage except stage 0 is depended upon
+    for stage_id in stage_plans.keys() {
+        if stage_id.stage != 0 && !depended_stages.contains(stage_id) {
+            return Err(DistError::internal(format!(
+                "Stage {} is not depended upon by any other stage",
+                stage_id.stage
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn resolve_stage_plan(
