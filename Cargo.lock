@@ -1413,6 +1413,7 @@ name = "datafusion-dist-integration-tests-app"
 version = "0.1.0"
 dependencies = [
  "arrow-flight 56.2.0",
+ "async-trait",
  "datafusion",
  "datafusion-dist",
  "datafusion-dist-cluster-postgres",

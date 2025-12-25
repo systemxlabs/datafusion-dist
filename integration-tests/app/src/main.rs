@@ -1,4 +1,8 @@
+pub mod table;
+
 use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc};
+
+use table::RunningJobsTable;
 
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Ticket,
@@ -50,6 +54,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(network),
     );
     runtime.start().await;
+
+    // Register the jobs table provider under information_schema
+    ctx.register_table(
+        "running_jobs",
+        Arc::new(RunningJobsTable::new(runtime.clone())),
+    )?;
 
     let dist_tonic_service =
         DistTonicServer::new(runtime.clone(), ctx.clone(), app_extension_codec.clone());

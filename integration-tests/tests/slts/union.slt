@@ -3,3 +3,7 @@ select * from simple union select * from simple
 ----
 Alice 25
 Bob 30
+
+query TIII rowsort
+select * from running_jobs;
+----

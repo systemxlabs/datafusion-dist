@@ -5,3 +5,7 @@ Alice 25 Alice 25
 Alice 25 Bob 30
 Bob 30 Alice 25
 Bob 30 Bob 30
+
+query TIII rowsort
+select * from running_jobs;
+----
