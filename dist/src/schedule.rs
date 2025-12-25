@@ -6,9 +6,8 @@ use std::{
 
 use datafusion::{
     common::tree_node::{TreeNode, TreeNodeRecursion},
-    physical_expr::physical_exprs_equal,
     physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties, Partitioning,
+        ExecutionPlan, ExecutionPlanProperties,
         coalesce_partitions::CoalescePartitionsExec, repartition::RepartitionExec,
     },
 };
@@ -64,13 +63,8 @@ impl DistSchedule for DefaultScheduler {
 }
 
 pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    // let final_partitioning = plan.output_partitioning();
-
     let mut fully_pipelined = true;
     plan.apply(|node| {
-        // if !partitioning_equals(node.output_partitioning(), final_partitioning) {
-        // fully_pipelined = false;
-        // }
         let any = node.as_any();
         if any.is::<RepartitionExec>() || any.is::<CoalescePartitionsExec>() {
             fully_pipelined = false;
@@ -129,21 +123,6 @@ fn assign_stage_all_tasks_to_node(
     *stage_index += 1;
 
     assignments
-}
-
-pub fn partitioning_equals(left: &Partitioning, right: &Partitioning) -> bool {
-    match (left, right) {
-        (Partitioning::RoundRobinBatch(count1), Partitioning::RoundRobinBatch(count2)) => {
-            count1 == count2
-        }
-        (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2)) => {
-            physical_exprs_equal(exprs1, exprs2) && (count1 == count2)
-        }
-        (Partitioning::UnknownPartitioning(count1), Partitioning::UnknownPartitioning(count2)) => {
-            count1 == count2
-        }
-        _ => false,
-    }
 }
 
 pub struct DisplayableTaskDistribution<'a>(pub &'a HashMap<TaskId, NodeId>);

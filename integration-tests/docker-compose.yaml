@@ -17,7 +17,6 @@ services:
     build:
       context: ../
       dockerfile: integration-tests/app/Dockerfile
-    image: datafusion-dist-integration-tests-app
     networks:
       dist_bridge:
     depends_on:
@@ -29,7 +28,9 @@ services:
       - RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=info
 
   integration-tests-app1:
-    image: datafusion-dist-integration-tests-app
+    build:
+      context: ../
+      dockerfile: integration-tests/app/Dockerfile
     networks:
       dist_bridge:
     depends_on:
@@ -41,7 +42,9 @@ services:
       - RUST_LOG=info,datafusion_dist=debug,datafusion_dist_network_tonic=debug,datafusion_dist_cluster_postgres=info
 
   integration-tests-app2:
-    image: datafusion-dist-integration-tests-app
+    build:
+      context: ../
+      dockerfile: integration-tests/app/Dockerfile
     networks:
       dist_bridge:
     depends_on:
