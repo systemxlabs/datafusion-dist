@@ -7,8 +7,8 @@ use std::{
 use datafusion::{
     common::tree_node::{TreeNode, TreeNodeRecursion},
     physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties,
-        coalesce_partitions::CoalescePartitionsExec, repartition::RepartitionExec,
+        ExecutionPlan, ExecutionPlanProperties, coalesce_partitions::CoalescePartitionsExec,
+        repartition::RepartitionExec,
     },
 };
 
