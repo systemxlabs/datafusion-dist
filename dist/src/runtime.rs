@@ -27,7 +27,7 @@ use crate::{
     planner::{
         DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,
     },
-    schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
+    schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
     util::timestamp_ms,
 };
 
@@ -81,7 +81,7 @@ impl DistRuntime {
             cluster,
             network,
             planner: Arc::new(DefaultPlanner),
-            scheduler: Arc::new(RoundRobinScheduler),
+            scheduler: Arc::new(DefaultScheduler),
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
@@ -121,7 +121,7 @@ impl DistRuntime {
                 .join(", ")
         );
 
-        let task_distribution = self.scheduler.schedule(node_states, &stage_plans).await?;
+        let task_distribution = self.scheduler.schedule(&node_states, &stage_plans).await?;
         debug!(
             "job {job_id} task distribution: {}",
             DisplayableTaskDistribution(&task_distribution)

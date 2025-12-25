@@ -4,7 +4,14 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::{
+    common::tree_node::{TreeNode, TreeNodeRecursion},
+    physical_expr::physical_exprs_equal,
+    physical_plan::{
+        ExecutionPlan, ExecutionPlanProperties, Partitioning,
+        coalesce_partitions::CoalescePartitionsExec, repartition::RepartitionExec,
+    },
+};
 
 use crate::{
     DistError, DistResult,
@@ -16,19 +23,19 @@ use crate::{
 pub trait DistSchedule: Debug + Send + Sync {
     async fn schedule(
         &self,
-        node_states: HashMap<NodeId, NodeState>,
+        node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>>;
 }
 
 #[derive(Debug)]
-pub struct RoundRobinScheduler;
+pub struct DefaultScheduler;
 
 #[async_trait::async_trait]
-impl DistSchedule for RoundRobinScheduler {
+impl DistSchedule for DefaultScheduler {
     async fn schedule(
         &self,
-        node_states: HashMap<NodeId, NodeState>,
+        node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         if node_states.is_empty() {
@@ -36,24 +43,106 @@ impl DistSchedule for RoundRobinScheduler {
         }
 
         let mut assignments = HashMap::new();
-        let mut index = 0;
+
+        let mut stage_index = 0;
+        let mut task_index = 0;
 
         for (stage_id, plan) in stage_plans.iter() {
-            let partition_count = plan.output_partitioning().partition_count();
-
-            for partition in 0..partition_count {
-                let task_id = stage_id.task_id(partition as u32);
-
-                let node_id = node_states
-                    .keys()
-                    .nth(index % node_states.len())
-                    .expect("index should be within bounds");
-                assignments.insert(task_id, node_id.clone());
-
-                index += 1;
+            if is_plan_fully_pipelined(plan) {
+                let assignment =
+                    assign_stage_tasks_to_all_nodes(*stage_id, plan, node_states, &mut task_index);
+                assignments.extend(assignment);
+            } else {
+                let assignment =
+                    assign_stage_all_tasks_to_node(*stage_id, plan, node_states, &mut stage_index);
+                assignments.extend(assignment);
+                stage_index += 1;
             }
         }
         Ok(assignments)
+    }
+}
+
+pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let final_partitioning = plan.output_partitioning();
+
+    let mut fully_pipelined = true;
+    plan.apply(|node| {
+        if !partitioning_equals(node.output_partitioning(), final_partitioning) {
+            fully_pipelined = false;
+        }
+        let any = node.as_any();
+        if any.is::<RepartitionExec>() || any.is::<CoalescePartitionsExec>() {
+            fully_pipelined = false;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("plan traversal should not fail");
+
+    fully_pipelined
+}
+
+fn assign_stage_tasks_to_all_nodes(
+    stage_id: StageId,
+    plan: &Arc<dyn ExecutionPlan>,
+    node_states: &HashMap<NodeId, NodeState>,
+    task_index: &mut usize,
+) -> HashMap<TaskId, NodeId> {
+    let mut assignments = HashMap::new();
+    let partition_count = plan.output_partitioning().partition_count();
+
+    for partition in 0..partition_count {
+        let task_id = stage_id.task_id(partition as u32);
+        assignments.insert(
+            task_id,
+            node_states
+                .keys()
+                .nth(*task_index % node_states.len())
+                .expect("index should be within bounds")
+                .clone(),
+        );
+        *task_index += 1;
+    }
+
+    assignments
+}
+
+fn assign_stage_all_tasks_to_node(
+    stage_id: StageId,
+    plan: &Arc<dyn ExecutionPlan>,
+    node_states: &HashMap<NodeId, NodeState>,
+    stage_index: &mut usize,
+) -> HashMap<TaskId, NodeId> {
+    let node_id = node_states
+        .keys()
+        .nth(*stage_index % node_states.len())
+        .expect("index should be within bounds");
+
+    let mut assignments = HashMap::new();
+    let partition_count = plan.output_partitioning().partition_count();
+
+    for partition in 0..partition_count {
+        let task_id = stage_id.task_id(partition as u32);
+        assignments.insert(task_id, node_id.clone());
+    }
+
+    *stage_index += 1;
+
+    assignments
+}
+
+pub fn partitioning_equals(left: &Partitioning, right: &Partitioning) -> bool {
+    match (left, right) {
+        (Partitioning::RoundRobinBatch(count1), Partitioning::RoundRobinBatch(count2)) => {
+            count1 == count2
+        }
+        (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2)) => {
+            physical_exprs_equal(exprs1, exprs2) && (count1 == count2)
+        }
+        (Partitioning::UnknownPartitioning(count1), Partitioning::UnknownPartitioning(count2)) => {
+            count1 == count2
+        }
+        _ => false,
     }
 }
 

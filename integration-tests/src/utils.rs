@@ -1,11 +1,20 @@
-use std::error::Error;
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    sync::Arc,
+};
 
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use datafusion::{
     arrow::{array::RecordBatch, util::pretty::pretty_format_batches},
-    physical_plan::display::DisplayableExecutionPlan,
+    physical_plan::{ExecutionPlan, display::DisplayableExecutionPlan},
 };
-use datafusion_dist::planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner};
+use datafusion_dist::{
+    DistResult,
+    cluster::{NodeId, NodeState},
+    planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId},
+    schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
+};
 use futures::TryStreamExt;
 use tonic::transport::Endpoint;
 use uuid::Uuid;
@@ -40,7 +49,11 @@ pub async fn execute_flightsql_query(sql: &str) -> Result<Vec<RecordBatch>, Box<
     Ok(batches)
 }
 
-pub async fn assert_planner(sql: &str, expected_stage_plans: &str) {
+pub async fn assert_planner(
+    sql: &str,
+    expected_plan: &str,
+    expected_stage_plans: &str,
+) -> HashMap<StageId, Arc<dyn ExecutionPlan>> {
     let ctx = build_session_context();
     let plan = ctx
         .sql(sql)
@@ -49,14 +62,78 @@ pub async fn assert_planner(sql: &str, expected_stage_plans: &str) {
         .create_physical_plan()
         .await
         .unwrap();
-    println!(
-        "Physical plan: {}",
-        DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-    );
+    let plan_str = DisplayableExecutionPlan::new(plan.as_ref())
+        .indent(true)
+        .to_string();
+    println!("Physical plan: {plan_str}");
+    assert_eq!(plan_str, expected_plan);
 
     let dist_planner = DefaultPlanner {};
     let stage_plans = dist_planner.plan_stages(Uuid::new_v4(), plan).unwrap();
     let actual = DisplayableStagePlans(&stage_plans).to_string();
     println!("Planner output: {actual}");
     assert_eq!(actual, expected_stage_plans);
+
+    stage_plans
+}
+
+pub fn mock_alive_nodes() -> HashMap<NodeId, NodeState> {
+    let mut nodes = HashMap::new();
+    nodes.insert(
+        NodeId {
+            host: "localhost".to_string(),
+            port: 50060,
+        },
+        NodeState::default(),
+    );
+    nodes.insert(
+        NodeId {
+            host: "localhost".to_string(),
+            port: 50070,
+        },
+        NodeState::default(),
+    );
+    nodes.insert(
+        NodeId {
+            host: "localhost".to_string(),
+            port: 50080,
+        },
+        NodeState::default(),
+    );
+    nodes
+}
+
+pub async fn schedule_tasks(
+    node_state: &HashMap<NodeId, NodeState>,
+    stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
+) -> DistResult<HashMap<TaskId, NodeId>> {
+    let distribution = DefaultScheduler.schedule(&node_state, &stage_plans).await?;
+    println!(
+        "Task distribution: {}",
+        DisplayableTaskDistribution(&distribution)
+    );
+
+    Ok(distribution)
+}
+
+pub fn assert_stage_distributed_into_one_node(stage: u32, distribution: &HashMap<TaskId, NodeId>) {
+    let distinct_nodes: HashSet<_> = distribution
+        .iter()
+        .filter(|(task_id, _)| task_id.stage == stage)
+        .map(|(_, node_id)| node_id)
+        .collect();
+    assert_eq!(distinct_nodes.len(), 1);
+}
+
+pub fn assert_stage_distributed_into_nodes(
+    stage: u32,
+    distribution: &HashMap<TaskId, NodeId>,
+    target_num_nodes: usize,
+) {
+    let distinct_nodes: HashSet<_> = distribution
+        .iter()
+        .filter(|(task_id, _)| task_id.stage == stage)
+        .map(|(_, node_id)| node_id)
+        .collect();
+    assert_eq!(distinct_nodes.len(), target_num_nodes);
 }
