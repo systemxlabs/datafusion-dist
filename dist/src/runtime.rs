@@ -28,6 +28,7 @@ use crate::{
         DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId, resolve_stage_plan,
     },
     schedule::{DisplayableTaskDistribution, DistSchedule, RoundRobinScheduler},
+    util::timestamp_ms,
 };
 
 #[derive(Debug, Clone)]
@@ -182,11 +183,11 @@ impl DistRuntime {
                 self.receive_tasks(scheduled_tasks).await?;
             } else {
                 debug!(
-                    "Sending tasks [{}] to {node_id}",
+                    "Sending job {job_id} tasks [{}] to {node_id}",
                     scheduled_tasks
                         .task_ids
                         .iter()
-                        .map(|t| t.to_string())
+                        .map(|t| format!("{}/{}", t.stage, t.partition))
                         .collect::<Vec<String>>()
                         .join(", ")
                 );
@@ -346,6 +347,7 @@ impl DistRuntime {
 #[derive(Debug)]
 pub struct StageState {
     pub stage_id: StageId,
+    pub create_at_ms: i64,
     pub stage_plan: Arc<dyn ExecutionPlan>,
     pub assigned_partitions: HashSet<usize>,
     pub task_sets: Mutex<Vec<TaskSet>>,
@@ -353,10 +355,10 @@ pub struct StageState {
 
 impl StageState {
     pub fn from_scheduled_tasks(
-        tasks: ScheduledTasks,
+        scheduled_tasks: ScheduledTasks,
     ) -> DistResult<HashMap<StageId, Arc<StageState>>> {
         let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
-        for task_id in tasks.task_ids {
+        for task_id in scheduled_tasks.task_ids {
             let stage_id = task_id.stage_id();
             stage_tasks.entry(stage_id).or_default().insert(task_id);
         }
@@ -365,7 +367,8 @@ impl StageState {
         for (stage_id, assigned_task_ids) in stage_tasks {
             let stage_state = StageState {
                 stage_id,
-                stage_plan: tasks
+                create_at_ms: timestamp_ms(),
+                stage_plan: scheduled_tasks
                     .stage_plans
                     .get(&stage_id)
                     .ok_or_else(|| {

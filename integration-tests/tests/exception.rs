@@ -24,6 +24,8 @@ async fn panic_task() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn client_not_poll() -> Result<(), Box<dyn std::error::Error>> {
+    setup_containers().await;
+
     let endpoint = Endpoint::from_static("http://localhost:50061");
     let channel = endpoint.connect().await?;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
