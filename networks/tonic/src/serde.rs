@@ -1,5 +1,7 @@
 //! Serialization and parsing functions for protobuf types.
 
+use std::collections::HashMap;
+
 use datafusion::arrow::{
     self,
     array::RecordBatch,
@@ -10,6 +12,7 @@ use datafusion_dist::{
     DistError, DistResult,
     network::{StageInfo, TaskSetInfo},
     planner::{StageId, TaskId},
+    runtime::TaskMetrics,
 };
 use tonic::Status;
 use uuid::Uuid;
@@ -108,32 +111,61 @@ pub fn serialize_stage_info(stage_id: StageId, stage_info: StageInfo) -> protobu
 // ============================================================================
 
 pub fn parse_task_set_info(proto: protobuf::TaskSetInfo) -> TaskSetInfo {
+    let mut dropped_partitions = HashMap::new();
+    for proto_dropped_partition in proto.dropped_partitions {
+        let partition = proto_dropped_partition.partition as usize;
+        let metrics = parse_task_metrics(
+            proto_dropped_partition
+                .metrics
+                .expect("task metrics is none"),
+        );
+        dropped_partitions.insert(partition, metrics);
+    }
     TaskSetInfo {
         running_partitions: proto
             .running_partitions
             .into_iter()
             .map(|p| p as usize)
             .collect(),
-        completed_partitions: proto
-            .completed_partitions
-            .into_iter()
-            .map(|p| p as usize)
-            .collect(),
+        dropped_partitions,
     }
 }
 
 pub fn serialize_task_set_info(task_set_info: TaskSetInfo) -> protobuf::TaskSetInfo {
+    let mut dropped_partitions = Vec::new();
+    for (dropped_partition, task_metrics) in task_set_info.dropped_partitions {
+        let serialized_metrics = serialize_task_metrics(task_metrics);
+        dropped_partitions.push(protobuf::DroppedPartition {
+            partition: dropped_partition as u32,
+            metrics: Some(serialized_metrics),
+        });
+    }
     protobuf::TaskSetInfo {
         running_partitions: task_set_info
             .running_partitions
             .into_iter()
             .map(|p| p as u32)
             .collect(),
-        completed_partitions: task_set_info
-            .completed_partitions
-            .into_iter()
-            .map(|p| p as u32)
-            .collect(),
+        dropped_partitions,
+    }
+}
+
+// ============================================================================
+// TaskMetrics serialization/parsing
+// ============================================================================
+pub fn parse_task_metrics(proto: protobuf::TaskMetrics) -> TaskMetrics {
+    TaskMetrics {
+        output_rows: proto.output_rows as usize,
+        output_bytes: proto.output_bytes as usize,
+        completed: proto.completed,
+    }
+}
+
+pub fn serialize_task_metrics(task_metrics: TaskMetrics) -> protobuf::TaskMetrics {
+    protobuf::TaskMetrics {
+        output_rows: task_metrics.output_rows as u64,
+        output_bytes: task_metrics.output_bytes as u64,
+        completed: task_metrics.completed,
     }
 }
 

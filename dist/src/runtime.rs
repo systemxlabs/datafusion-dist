@@ -218,13 +218,13 @@ impl DistRuntime {
             .await?;
         let stream = df_stream.map_err(DistError::from).boxed();
 
-        let task_stream = TaskStream {
+        let task_stream = TaskStream::new(
             task_id,
             task_set_id,
             stage_state,
-            event_sender: self.event_sender.clone(),
+            self.event_sender.clone(),
             stream,
-        };
+        );
 
         Ok(task_stream.boxed())
     }
@@ -276,7 +276,7 @@ impl DistRuntime {
         guard.retain(|stage_id, _| stage_id.job_id != job_id);
     }
 
-    pub async fn get_all_jobs(&self) -> DistResult<Vec<JobOverview>> {
+    pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
         let mut combined_status = self.get_local_job_status(None).await;
 
@@ -312,39 +312,15 @@ impl DistRuntime {
         }
 
         // Aggregate stats by job_id
-        let mut job_stats: HashMap<Uuid, (usize, usize)> = HashMap::new();
-
+        let mut job_stats: HashMap<Uuid, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in combined_status {
-            let running: usize = stage_info
-                .task_set_infos
-                .iter()
-                .map(|ts| ts.running_partitions.len())
-                .sum();
-            let completed: usize = stage_info
-                .task_set_infos
-                .iter()
-                .map(|ts| ts.completed_partitions.len())
-                .sum();
-
             job_stats
                 .entry(stage_id.job_id)
-                .and_modify(|(r, c)| {
-                    *r += running;
-                    *c += completed;
-                })
-                .or_insert((running, completed));
+                .or_default()
+                .insert(stage_id, stage_info);
         }
 
-        Ok(job_stats
-            .into_iter()
-            .map(
-                |(job_id, (num_running_tasks, num_completed_tasks))| JobOverview {
-                    job_id,
-                    num_running_tasks,
-                    num_completed_tasks,
-                },
-            )
-            .collect())
+        Ok(job_stats)
     }
 }
 
@@ -423,7 +399,7 @@ impl StageState {
             id: task_set_id,
             shared_plan: self.stage_plan.clone().reset_state()?,
             running_partitions: HashSet::new(),
-            completed_partitions: HashSet::new(),
+            dropped_partitions: HashMap::new(),
         };
         new_task_set.running_partitions.insert(partition);
         let shared_plan = new_task_set.shared_plan.clone();
@@ -435,15 +411,20 @@ impl StageState {
         Ok((task_set_id, df_stream))
     }
 
-    pub async fn complete_task(&self, task_id: TaskId, task_set_id: Uuid) {
+    pub async fn complete_task(
+        &self,
+        task_id: TaskId,
+        task_set_id: Uuid,
+        task_metrics: TaskMetrics,
+    ) {
         let mut guard = self.task_sets.lock().await;
         if let Some(task_set) = guard.iter_mut().find(|task_set| task_set.id == task_set_id) {
             task_set
                 .running_partitions
                 .remove(&(task_id.partition as usize));
             task_set
-                .completed_partitions
-                .insert(task_id.partition as usize);
+                .dropped_partitions
+                .insert(task_id.partition as usize, task_metrics);
         }
     }
 
@@ -453,7 +434,7 @@ impl StageState {
             .iter()
             .flat_map(|task_set| {
                 let mut executed = task_set.running_partitions.clone();
-                executed.extend(task_set.completed_partitions.iter());
+                executed.extend(task_set.dropped_partitions.keys());
                 executed
             })
             .collect::<HashSet<_>>();
@@ -473,14 +454,21 @@ pub struct TaskSet {
     pub id: Uuid,
     pub shared_plan: Arc<dyn ExecutionPlan>,
     pub running_partitions: HashSet<usize>,
-    pub completed_partitions: HashSet<usize>,
+    pub dropped_partitions: HashMap<usize, TaskMetrics>,
 }
 
 impl TaskSet {
     pub fn never_executed(&self, partition: &usize) -> bool {
         !self.running_partitions.contains(partition)
-            && !self.completed_partitions.contains(partition)
+            && !self.dropped_partitions.contains_key(partition)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskMetrics {
+    pub output_rows: usize,
+    pub output_bytes: usize,
+    pub completed: bool,
 }
 
 pub struct TaskStream {
@@ -489,13 +477,49 @@ pub struct TaskStream {
     pub stage_state: Arc<StageState>,
     pub event_sender: Sender<Event>,
     pub stream: RecordBatchStream,
+    pub output_rows: usize,
+    pub output_bytes: usize,
+    pub completed: bool,
+}
+
+impl TaskStream {
+    pub fn new(
+        task_id: TaskId,
+        task_set_id: Uuid,
+        stage_state: Arc<StageState>,
+        event_sender: Sender<Event>,
+        stream: RecordBatchStream,
+    ) -> Self {
+        Self {
+            task_id,
+            task_set_id,
+            stage_state,
+            event_sender,
+            stream,
+            output_rows: 0,
+            output_bytes: 0,
+            completed: false,
+        }
+    }
 }
 
 impl Stream for TaskStream {
     type Item = DistResult<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.stream.as_mut().poll_next(cx)
+        match self.stream.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                self.output_rows += batch.num_rows();
+                self.output_bytes += batch.get_array_memory_size();
+                Poll::Ready(Some(Ok(batch)))
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => {
+                self.completed = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -503,10 +527,17 @@ impl Drop for TaskStream {
     fn drop(&mut self) {
         let task_id = self.task_id;
         let task_set_id = self.task_set_id;
+        let task_metrics = TaskMetrics {
+            output_bytes: self.output_bytes,
+            output_rows: self.output_rows,
+            completed: self.completed,
+        };
         let stage_state = self.stage_state.clone();
         let sender = self.event_sender.clone();
         tokio::spawn(async move {
-            stage_state.complete_task(task_id, task_set_id).await;
+            stage_state
+                .complete_task(task_id, task_set_id, task_metrics)
+                .await;
             if stage_state.stage_id.stage == 0
                 && stage_state
                     .assigned_partitions_executed_at_least_once()
@@ -519,10 +550,4 @@ impl Drop for TaskStream {
             }
         });
     }
-}
-
-pub struct JobOverview {
-    pub job_id: Uuid,
-    pub num_running_tasks: usize,
-    pub num_completed_tasks: usize,
 }

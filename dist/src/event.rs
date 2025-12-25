@@ -131,7 +131,7 @@ pub async fn check_job_completed(
         let is_completed = stage0_info
             .task_set_infos
             .iter()
-            .any(|ts| ts.completed_partitions.contains(partition));
+            .any(|ts| ts.dropped_partitions.contains_key(partition));
         if !is_completed {
             return Ok(Some(false));
         }

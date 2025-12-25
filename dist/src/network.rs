@@ -11,7 +11,7 @@ use crate::{
     DistResult, RecordBatchStream,
     cluster::NodeId,
     planner::{StageId, TaskId},
-    runtime::{StageState, TaskSet},
+    runtime::{StageState, TaskMetrics, TaskSet},
 };
 
 #[async_trait::async_trait]
@@ -77,14 +77,14 @@ impl StageInfo {
 #[derive(Debug, Clone)]
 pub struct TaskSetInfo {
     pub running_partitions: HashSet<usize>,
-    pub completed_partitions: HashSet<usize>,
+    pub dropped_partitions: HashMap<usize, TaskMetrics>,
 }
 
 impl TaskSetInfo {
     pub fn from_task_set(task_set: &TaskSet) -> Self {
         TaskSetInfo {
             running_partitions: task_set.running_partitions.clone(),
-            completed_partitions: task_set.completed_partitions.clone(),
+            dropped_partitions: task_set.dropped_partitions.clone(),
         }
     }
 }

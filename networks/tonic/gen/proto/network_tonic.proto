@@ -55,7 +55,18 @@ message StageInfo {
 
 message TaskSetInfo {
   repeated uint32 running_partitions = 1;
-  repeated uint32 completed_partitions = 2;
+  repeated DroppedPartition dropped_partitions = 2;
+}
+
+message DroppedPartition {
+  uint32 partition = 1;
+  TaskMetrics metrics = 2;
+}
+
+message TaskMetrics {
+  uint64 output_bytes = 1;
+  uint64 output_rows = 2;
+  bool completed = 3;
 }
 
 message CleanupJobReq {

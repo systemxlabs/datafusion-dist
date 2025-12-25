@@ -59,8 +59,24 @@ pub struct StageInfo {
 pub struct TaskSetInfo {
     #[prost(uint32, repeated, tag = "1")]
     pub running_partitions: ::prost::alloc::vec::Vec<u32>,
-    #[prost(uint32, repeated, tag = "2")]
-    pub completed_partitions: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, repeated, tag = "2")]
+    pub dropped_partitions: ::prost::alloc::vec::Vec<DroppedPartition>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DroppedPartition {
+    #[prost(uint32, tag = "1")]
+    pub partition: u32,
+    #[prost(message, optional, tag = "2")]
+    pub metrics: ::core::option::Option<TaskMetrics>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct TaskMetrics {
+    #[prost(uint64, tag = "1")]
+    pub output_bytes: u64,
+    #[prost(uint64, tag = "2")]
+    pub output_rows: u64,
+    #[prost(bool, tag = "3")]
+    pub completed: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CleanupJobReq {
