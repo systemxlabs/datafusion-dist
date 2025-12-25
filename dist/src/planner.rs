@@ -7,8 +7,10 @@ use std::{
 use datafusion::{
     common::tree_node::{Transformed, TreeNode},
     physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties, coalesce_partitions::CoalescePartitionsExec,
-        display::DisplayableExecutionPlan, repartition::RepartitionExec,
+        ExecutionPlan, ExecutionPlanProperties,
+        aggregates::{AggregateExec, AggregateMode},
+        display::DisplayableExecutionPlan,
+        repartition::RepartitionExec,
     },
 };
 use itertools::Itertools;
@@ -89,8 +91,8 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_count = 0u32;
         let plan = plan
             .transform_up(|node| {
-                if node.as_any().is::<RepartitionExec>()
-                    || node.as_any().is::<CoalescePartitionsExec>()
+                if let Some(agg) = node.as_any().downcast_ref::<AggregateExec>()
+                    && matches!(agg.mode(), AggregateMode::Partial)
                 {
                     stage_count += node.children().len() as u32;
                 }
@@ -101,8 +103,8 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_plans = HashMap::new();
         let final_plan = plan
             .transform_up(|node| {
-                if node.as_any().is::<RepartitionExec>()
-                    || node.as_any().is::<CoalescePartitionsExec>()
+                if let Some(agg) = node.as_any().downcast_ref::<AggregateExec>()
+                    && matches!(agg.mode(), AggregateMode::Partial)
                 {
                     let mut new_children = Vec::with_capacity(node.children().len());
 

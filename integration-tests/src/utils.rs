@@ -107,7 +107,7 @@ pub async fn schedule_tasks(
     node_state: &HashMap<NodeId, NodeState>,
     stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
 ) -> DistResult<HashMap<TaskId, NodeId>> {
-    let distribution = DefaultScheduler.schedule(&node_state, &stage_plans).await?;
+    let distribution = DefaultScheduler.schedule(node_state, stage_plans).await?;
     println!(
         "Task distribution: {}",
         DisplayableTaskDistribution(&distribution)

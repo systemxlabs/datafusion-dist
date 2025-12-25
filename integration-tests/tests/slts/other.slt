@@ -1,4 +1,10 @@
 query TI rowsort
+select * from simple
+----
+Alice 25
+Bob 30
+
+query TI rowsort
 select * from simple union select * from simple
 ----
 Alice 25

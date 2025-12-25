@@ -64,13 +64,13 @@ impl DistSchedule for DefaultScheduler {
 }
 
 pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let final_partitioning = plan.output_partitioning();
+    // let final_partitioning = plan.output_partitioning();
 
     let mut fully_pipelined = true;
     plan.apply(|node| {
-        if !partitioning_equals(node.output_partitioning(), final_partitioning) {
-            fully_pipelined = false;
-        }
+        // if !partitioning_equals(node.output_partitioning(), final_partitioning) {
+        // fully_pipelined = false;
+        // }
         let any = node.as_any();
         if any.is::<RepartitionExec>() || any.is::<CoalescePartitionsExec>() {
             fully_pipelined = false;
