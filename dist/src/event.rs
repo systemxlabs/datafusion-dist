@@ -1,20 +1,26 @@
 use std::{collections::HashMap, sync::Arc};
 
 use log::{debug, error};
-use tokio::sync::{Mutex, mpsc::Receiver};
+use tokio::sync::{
+    Mutex,
+    mpsc::{Receiver, Sender},
+};
 use uuid::Uuid;
 
 use crate::{
     DistResult,
     cluster::{DistCluster, NodeId},
+    config::DistConfig,
     network::{DistNetwork, StageInfo},
     planner::StageId,
     runtime::StageState,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
-    TryCleanupJob(Uuid),
+    CheckJobCompleted(Uuid),
+    CleanupJob(Uuid),
+    ReceivedStage0Tasks(Vec<StageId>),
 }
 
 pub fn start_event_handler(mut handler: EventHandler) {
@@ -25,9 +31,11 @@ pub fn start_event_handler(mut handler: EventHandler) {
 
 pub struct EventHandler {
     pub local_node: NodeId,
+    pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
     pub local_stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    pub sender: Sender<Event>,
     pub receiver: Receiver<Event>,
 }
 
@@ -36,38 +44,26 @@ impl EventHandler {
         while let Some(event) = self.receiver.recv().await {
             debug!("Received event: {event:?}");
             match event {
-                Event::TryCleanupJob(job_id) => {
-                    self.handle_try_cleanup_job(job_id).await;
+                Event::CheckJobCompleted(job_id) => {
+                    self.handle_check_job_completed(job_id).await;
+                }
+                Event::CleanupJob(job_id) => {
+                    self.handle_cleanup_job(job_id).await;
+                }
+                Event::ReceivedStage0Tasks(stage0_ids) => {
+                    self.handle_received_stage0_tasks(stage0_ids).await;
                 }
             }
         }
     }
 
-    async fn handle_try_cleanup_job(&mut self, job_id: Uuid) {
+    async fn handle_check_job_completed(&mut self, job_id: Uuid) {
         match check_job_completed(&self.cluster, &self.network, &self.local_stages, job_id).await {
             Ok(Some(true)) => {
-                debug!("Job {job_id} completed, removeing it from cluster");
-                let alive_nodes = match self.cluster.alive_nodes().await {
-                    Ok(nodes) => nodes,
-                    Err(err) => {
-                        error!("Failed to get alive nodes: {err}");
-                        return;
-                    }
-                };
+                debug!("Job {job_id} completed, remove it from cluster");
 
-                for node_id in alive_nodes.keys() {
-                    if node_id == &self.local_node {
-                        let mut guard = self.local_stages.lock().await;
-                        guard.retain(|stage_id, _| stage_id.job_id != job_id);
-                        drop(guard);
-                    } else {
-                        // Send cleanup request to remote node
-                        if let Err(err) = self.network.cleanup_job(node_id.clone(), job_id).await {
-                            error!(
-                                "Failed to send cleanup job {job_id} request to node {node_id}: {err}"
-                            );
-                        }
-                    }
+                if let Err(e) = self.sender.send(Event::CleanupJob(job_id)).await {
+                    error!("Failed to send cleanup job event for job {job_id}: {e}");
                 }
             }
             Ok(_) => {}
@@ -75,6 +71,54 @@ impl EventHandler {
                 error!("Failed to check job {job_id} completed: {err}");
             }
         }
+    }
+
+    async fn handle_cleanup_job(&mut self, job_id: Uuid) {
+        let alive_nodes = match self.cluster.alive_nodes().await {
+            Ok(nodes) => nodes,
+            Err(err) => {
+                error!("Failed to get alive nodes: {err}");
+                return;
+            }
+        };
+
+        for node_id in alive_nodes.keys() {
+            if node_id == &self.local_node {
+                let mut guard = self.local_stages.lock().await;
+                guard.retain(|stage_id, _| stage_id.job_id != job_id);
+                drop(guard);
+            } else {
+                // Send cleanup request to remote node
+                if let Err(err) = self.network.cleanup_job(node_id.clone(), job_id).await {
+                    error!("Failed to send cleanup job {job_id} request to node {node_id}: {err}");
+                }
+            }
+        }
+    }
+
+    async fn handle_received_stage0_tasks(&self, stage0_ids: Vec<StageId>) {
+        let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
+        let local_stages = self.local_stages.clone();
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(stage0_task_poll_timeout).await;
+            let stages_guard = local_stages.lock().await;
+            for stage_id in stage0_ids {
+                if let Some(stage) = stages_guard.get(&stage_id)
+                    && stage.never_executed().await
+                {
+                    debug!("Found stage0 {stage_id} never polled until timeout");
+
+                    if let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await {
+                        error!(
+                            "Failed to send CleanupJob event for job {}: {e}",
+                            stage_id.job_id
+                        );
+                    }
+                    break;
+                }
+            }
+        });
     }
 }
 

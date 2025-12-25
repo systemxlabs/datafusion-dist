@@ -61,11 +61,14 @@ impl DistRuntime {
         );
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(1024);
+
         let event_handler = EventHandler {
             local_node: node_id.clone(),
+            config: config.clone(),
             cluster: cluster.clone(),
             network: network.clone(),
             local_stages: stages.clone(),
+            sender: sender.clone(),
             receiver,
         };
         start_event_handler(event_handler);
@@ -261,8 +264,24 @@ impl DistRuntime {
                 .join(", ")
         );
         let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
+        let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         let mut guard = self.stages.lock().await;
         guard.extend(stage_states);
+
+        let stage0_ids = stage_ids
+            .iter()
+            .filter(|id| id.stage == 0)
+            .cloned()
+            .collect::<Vec<StageId>>();
+        if !stage0_ids.is_empty() {
+            self.event_sender
+                .send(Event::ReceivedStage0Tasks(stage0_ids))
+                .await
+                .map_err(|e| {
+                    DistError::internal(format!("Failed to send ReceivedStage0Tasks event: {e}"))
+                })?;
+        }
+
         Ok(())
     }
 
@@ -447,6 +466,16 @@ impl StageState {
         }
         true
     }
+
+    pub async fn never_executed(&self) -> bool {
+        let guard = self.task_sets.lock().await;
+        let never_executed = guard
+            .iter()
+            .all(|set| set.running_partitions.is_empty() && set.dropped_partitions.is_empty());
+        drop(guard);
+
+        never_executed
+    }
 }
 
 #[derive(Debug)]
@@ -542,10 +571,10 @@ impl Drop for TaskStream {
                 && stage_state
                     .assigned_partitions_executed_at_least_once()
                     .await
-                && let Err(e) = sender.send(Event::TryCleanupJob(task_id.job_id)).await
+                && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
             {
                 error!(
-                    "Failed to send TryCleanupJob event after task {task_id} stream dropped: {e}"
+                    "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
                 );
             }
         });
