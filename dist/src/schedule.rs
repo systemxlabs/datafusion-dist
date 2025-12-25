@@ -11,6 +11,7 @@ use datafusion::{
         repartition::RepartitionExec,
     },
 };
+use itertools::Itertools;
 
 use crate::{
     DistError, DistResult,
@@ -139,15 +140,35 @@ impl Display for DisplayableTaskDistribution<'_> {
         }
 
         let mut node_dist = Vec::new();
-        for (node_id, tasks) in node_tasks.iter() {
-            node_dist.push(format!(
-                "{}->{node_id}",
-                tasks
-                    .iter()
-                    .map(|t| format!("{}/{}", t.stage, t.partition))
-                    .collect::<Vec<String>>()
-                    .join(",")
-            ));
+        for (node_id, tasks) in node_tasks
+            .into_iter()
+            .sorted_by_key(|(node_id, _)| *node_id)
+        {
+            let stage_groups = tasks.into_iter().into_group_map_by(|task_id| task_id.stage);
+            let stage_groups_display = stage_groups
+                .into_iter()
+                .sorted_by_key(|(stage, _)| *stage)
+                .map(|(stage, tasks)| {
+                    format!(
+                        "{stage}/{}",
+                        if tasks.len() == 1 {
+                            format!("{}", tasks[0].partition)
+                        } else {
+                            format!(
+                                "{{{}}}",
+                                tasks
+                                    .into_iter()
+                                    .sorted()
+                                    .map(|t| t.partition.to_string())
+                                    .collect::<Vec<String>>()
+                                    .join(",")
+                            )
+                        }
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(",");
+            node_dist.push(format!("{stage_groups_display}->{node_id}",));
         }
 
         write!(f, "{}", node_dist.join(", "))

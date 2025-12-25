@@ -15,7 +15,7 @@ pub trait DistCluster: Debug + Send + Sync {
     async fn alive_nodes(&self) -> DistResult<HashMap<NodeId, NodeState>>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NodeId {
     pub host: String,
     pub port: u16,
