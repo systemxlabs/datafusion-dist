@@ -20,3 +20,4 @@ sqllogictest-flightsql = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 tonic = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
+async-trait = { workspace = true }

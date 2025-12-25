@@ -2,7 +2,3 @@ query I rowsort
 select sum(age) from simple
 ----
 55
-
-query TIII rowsort
-select * from running_jobs;
-----

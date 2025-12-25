@@ -1,4 +1,6 @@
-use datafusion_dist_integration_tests::setup_containers;
+use std::time::Duration;
+
+use datafusion_dist_integration_tests::{setup_containers, utils::execute_flightsql_query};
 use sqllogictest_flightsql::runner::FlightSqlDB;
 
 #[tokio::test]
@@ -20,5 +22,12 @@ async fn sqllogictest() -> Result<(), Box<dyn std::error::Error>> {
             tester.run_file_async(entry.path()).await?;
         }
     }
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // all jobs should be cleaned up
+    let batches = execute_flightsql_query("select * from running_jobs").await?;
+    assert!(batches.is_empty());
+
     Ok(())
 }
