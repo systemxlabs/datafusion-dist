@@ -21,7 +21,7 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
-    event::{Event, EventHandler, local_job_status, start_event_handler},
+    event::{Event, EventHandler, cleanup_job, local_job_status, start_event_handler},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{
@@ -294,6 +294,17 @@ impl DistRuntime {
         debug!("Cleaning up local Job {job_id}");
         let mut guard = self.stages.lock().await;
         guard.retain(|stage_id, _| stage_id.job_id != job_id);
+    }
+
+    pub async fn cleanup_job(&self, job_id: Uuid) -> DistResult<()> {
+        cleanup_job(
+            &self.node_id,
+            &self.cluster,
+            &self.network,
+            &self.stages,
+            job_id,
+        )
+        .await
     }
 
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {

@@ -74,25 +74,16 @@ impl EventHandler {
     }
 
     async fn handle_cleanup_job(&mut self, job_id: Uuid) {
-        let alive_nodes = match self.cluster.alive_nodes().await {
-            Ok(nodes) => nodes,
-            Err(err) => {
-                error!("Failed to get alive nodes: {err}");
-                return;
-            }
-        };
-
-        for node_id in alive_nodes.keys() {
-            if node_id == &self.local_node {
-                let mut guard = self.local_stages.lock().await;
-                guard.retain(|stage_id, _| stage_id.job_id != job_id);
-                drop(guard);
-            } else {
-                // Send cleanup request to remote node
-                if let Err(err) = self.network.cleanup_job(node_id.clone(), job_id).await {
-                    error!("Failed to send cleanup job {job_id} request to node {node_id}: {err}");
-                }
-            }
+        if let Err(e) = cleanup_job(
+            &self.local_node,
+            &self.cluster,
+            &self.network,
+            &self.local_stages,
+            job_id,
+        )
+        .await
+        {
+            error!("Failed to cleanup job {job_id}: {e}");
         }
     }
 
@@ -199,4 +190,26 @@ pub async fn local_job_status(
     }
 
     result
+}
+
+pub async fn cleanup_job(
+    local_node: &NodeId,
+    cluster: &Arc<dyn DistCluster>,
+    network: &Arc<dyn DistNetwork>,
+    local_stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    job_id: Uuid,
+) -> DistResult<()> {
+    let alive_nodes = cluster.alive_nodes().await?;
+
+    for node_id in alive_nodes.keys() {
+        if node_id == local_node {
+            let mut guard = local_stages.lock().await;
+            guard.retain(|stage_id, _| stage_id.job_id != job_id);
+            drop(guard);
+        } else {
+            // Send cleanup request to remote node
+            network.cleanup_job(node_id.clone(), job_id).await?
+        }
+    }
+    Ok(())
 }
