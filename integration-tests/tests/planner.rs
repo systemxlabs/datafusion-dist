@@ -20,7 +20,7 @@ DataSourceExec: partitions=2, partition_sizes=[1, 1]
     Ok(())
 }
 #[tokio::test]
-async fn cross_join_planning() -> Result<(), Box<dyn std::error::Error>> {
+async fn cross_join() -> Result<(), Box<dyn std::error::Error>> {
     let stage_plans = assert_planner(
         "select * from simple as t1 join simple as t2",
         r#"CrossJoinExec
@@ -44,7 +44,57 @@ CrossJoinExec
 }
 
 #[tokio::test]
-async fn unio_planning() -> Result<(), Box<dyn std::error::Error>> {
+async fn nested_loop_join_planning() -> Result<(), Box<dyn std::error::Error>> {
+    let stage_plans = assert_planner(
+        "select * from simple as t1 join simple as t2 on t1.age > t2.age",
+        r#"NestedLoopJoinExec: join_type=Inner, filter=age@0 > age@1
+  CoalescePartitionsExec
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+        r#"===============Stage 0 (partitions=2)===============
+NestedLoopJoinExec: join_type=Inner, filter=age@0 > age@1
+  CoalescePartitionsExec
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+    )
+    .await;
+
+    let nodes = mock_alive_nodes();
+    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    assert_stage_distributed_into_one_node(0, &distribution);
+    Ok(())
+}
+
+#[tokio::test]
+async fn hash_join_collect_left() -> Result<(), Box<dyn std::error::Error>> {
+    let stage_plans = assert_planner(
+        "select * from simple as t1 join simple as t2 on t1.name = t2.name",
+        r#"CoalesceBatchesExec: target_batch_size=8192
+  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
+    CoalescePartitionsExec
+      DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+        r#"===============Stage 0 (partitions=2)===============
+CoalesceBatchesExec: target_batch_size=8192
+  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
+    CoalescePartitionsExec
+      DataSourceExec: partitions=2, partition_sizes=[1, 1]
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+    )
+    .await;
+
+    let nodes = mock_alive_nodes();
+    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    assert_stage_distributed_into_one_node(0, &distribution);
+    Ok(())
+}
+
+#[tokio::test]
+async fn union() -> Result<(), Box<dyn std::error::Error>> {
     let stage_plans = assert_planner(
         "select * from simple union select * from simple",
         r#"AggregateExec: mode=FinalPartitioned, gby=[name@0 as name, age@1 as age], aggr=[]

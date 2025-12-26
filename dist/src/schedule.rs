@@ -8,7 +8,7 @@ use datafusion::{
     common::tree_node::{TreeNode, TreeNodeRecursion},
     physical_plan::{
         ExecutionPlan, ExecutionPlanProperties, coalesce_partitions::CoalescePartitionsExec,
-        repartition::RepartitionExec,
+        joins::NestedLoopJoinExec, repartition::RepartitionExec,
     },
 };
 use itertools::Itertools;
@@ -67,7 +67,10 @@ pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
     let mut fully_pipelined = true;
     plan.apply(|node| {
         let any = node.as_any();
-        if any.is::<RepartitionExec>() || any.is::<CoalescePartitionsExec>() {
+        if any.is::<RepartitionExec>()
+            || any.is::<CoalescePartitionsExec>()
+            || any.is::<NestedLoopJoinExec>()
+        {
             fully_pipelined = false;
         }
         Ok(TreeNodeRecursion::Continue)
