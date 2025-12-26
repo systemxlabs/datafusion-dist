@@ -7,8 +7,10 @@ use std::{
 use datafusion::{
     common::tree_node::{TreeNode, TreeNodeRecursion},
     physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties, coalesce_partitions::CoalescePartitionsExec,
-        joins::NestedLoopJoinExec, repartition::RepartitionExec,
+        ExecutionPlan, ExecutionPlanProperties,
+        coalesce_partitions::CoalescePartitionsExec,
+        joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
+        repartition::RepartitionExec,
     },
 };
 use itertools::Itertools;
@@ -70,6 +72,11 @@ pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
         if any.is::<RepartitionExec>()
             || any.is::<CoalescePartitionsExec>()
             || any.is::<NestedLoopJoinExec>()
+        {
+            fully_pipelined = false;
+        }
+        if let Some(hash_join) = any.downcast_ref::<HashJoinExec>()
+            && hash_join.partition_mode() == &PartitionMode::CollectLeft
         {
             fully_pipelined = false;
         }

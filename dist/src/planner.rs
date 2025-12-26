@@ -10,6 +10,7 @@ use datafusion::{
         ExecutionPlan, ExecutionPlanProperties,
         aggregates::{AggregateExec, AggregateMode},
         display::DisplayableExecutionPlan,
+        joins::{HashJoinExec, PartitionMode},
     },
 };
 use itertools::Itertools;
@@ -87,9 +88,7 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_count = 0u32;
         let plan = plan
             .transform_up(|node| {
-                if let Some(agg) = node.as_any().downcast_ref::<AggregateExec>()
-                    && matches!(agg.mode(), AggregateMode::Partial)
-                {
+                if is_plan_children_can_be_stages(node.as_ref()) {
                     stage_count += node.children().len() as u32;
                 }
                 Ok(Transformed::no(node))
@@ -99,9 +98,7 @@ impl DistPlanner for DefaultPlanner {
         let mut stage_plans = HashMap::new();
         let final_plan = plan
             .transform_up(|node| {
-                if let Some(agg) = node.as_any().downcast_ref::<AggregateExec>()
-                    && matches!(agg.mode(), AggregateMode::Partial)
-                {
+                if is_plan_children_can_be_stages(node.as_ref()) {
                     let mut new_children = Vec::with_capacity(node.children().len());
 
                     for child in node.children() {
@@ -130,6 +127,16 @@ impl DistPlanner for DefaultPlanner {
         stage_plans.insert(final_stage_id, final_plan);
 
         Ok(stage_plans)
+    }
+}
+
+pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
+    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+        matches!(hash_join.partition_mode(), PartitionMode::Partitioned)
+    } else if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
+        matches!(agg.mode(), AggregateMode::Partial)
+    } else {
+        false
     }
 }
 
