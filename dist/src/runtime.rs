@@ -5,6 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use datafusion::{
@@ -509,7 +510,7 @@ impl TaskSet {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskMetrics {
     pub output_rows: usize,
     pub output_bytes: usize,

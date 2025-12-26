@@ -5,6 +5,7 @@ use std::{
 };
 
 use datafusion::physical_plan::ExecutionPlan;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -51,7 +52,7 @@ impl ScheduledTasks {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageInfo {
     pub assigned_partitions: HashSet<usize>,
     pub task_set_infos: Vec<TaskSetInfo>,
@@ -74,7 +75,7 @@ impl StageInfo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSetInfo {
     pub running_partitions: HashSet<usize>,
     pub dropped_partitions: HashMap<usize, TaskMetrics>,
