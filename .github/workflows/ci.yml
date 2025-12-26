@@ -27,6 +27,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Build test app image
+        run: cd integration-tests && docker build -f app/Dockerfile -t datafusion-dist-integration-tests-app .
+
       - name: Run cargo test
         run: cargo test --all-features
 
