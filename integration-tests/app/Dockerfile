@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Copy the entire workspace
 # Note: Build this Dockerfile from the integration-tests root:
-# docker build -f app/Dockerfile -t datafusion-dist-integration-tests-app .
+# docker build -f app/Dockerfile -t datafusion-dist-integration-tests-app ../
 COPY ../Cargo.toml ./
 COPY ../Cargo.lock ./
 COPY ../dist ./dist
