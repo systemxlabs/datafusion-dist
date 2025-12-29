@@ -46,6 +46,16 @@ impl DefaultScheduler {
             memory_datasource_size_threshold: 1024 * 1024,
         }
     }
+
+    pub fn with_assign_self(mut self, assign_self: Option<AssignSelfFn>) -> Self {
+        self.assign_self = assign_self;
+        self
+    }
+
+    pub fn with_memory_datasource_size_threshold(mut self, threshold: usize) -> Self {
+        self.memory_datasource_size_threshold = threshold;
+        self
+    }
 }
 
 impl Debug for DefaultScheduler {
