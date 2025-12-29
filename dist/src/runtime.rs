@@ -103,30 +103,73 @@ impl DistRuntime {
         self.heartbeater.start();
     }
 
-    /// Initiates graceful exit process:
-    /// 1. Sets node status to Draining, so no new tasks are assigned
-    /// 2. Waits for running tasks to complete or until timeout
-    /// 3. Returns when all tasks are completed or timeout is reached
-    pub async fn graceful_exit(&self) {
-        // Set node status to Draining
+    /// Set node status to Draining and wait for tasks to complete
+    /// No new tasks will be assigned, but existing tasks will continue to run
+    /// If timeout is provided, waits for tasks to complete or until timeout
+    /// If timeout is None, waits indefinitely for all tasks to complete
+    /// Returns when all tasks are completed or timeout is reached
+    pub async fn draining(&self, timeout: Option<Duration>) {
+        // Step 1: Set status to Draining
         self.heartbeater
             .set_status(crate::cluster::NodeStatus::Draining)
             .await;
         debug!("Node status set to Draining, no new tasks will be assigned");
 
-        let timeout = self.config.graceful_exit_timeout;
+        // Step 2: Wait for running tasks to complete or timeout
+        if let Some(timeout) = timeout {
+            // With timeout: spawn background task and wait for timeout or completion
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            let stages = self.stages.clone();
 
-        // Spawn a background task to check task completion status
-        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-        let stages = self.stages.clone();
+            tokio::spawn(async move {
+                let mut check_interval = tokio::time::interval(Duration::from_secs(1));
 
-        tokio::spawn(async move {
+                loop {
+                    check_interval.tick().await;
+
+                    let guard = stages.lock().await;
+                    let mut all_tasks_completed = true;
+
+                    for (stage_id, stage_state) in guard.iter() {
+                        let running_tasks = stage_state.num_running_tasks().await;
+                        if running_tasks > 0 {
+                            all_tasks_completed = false;
+                            debug!(
+                                "Stage {stage_id} still has {running_tasks} running tasks, waiting..."
+                            );
+                            break;
+                        }
+                    }
+
+                    drop(guard);
+
+                    if all_tasks_completed {
+                        let _ = tx.send(true);
+                        break;
+                    }
+                }
+            });
+
+            // Wait for either timeout or task completion
+            match tokio::time::timeout(timeout, rx).await {
+                Ok(Ok(_)) => {
+                    debug!("All tasks completed");
+                }
+                Ok(Err(_)) => {
+                    debug!("Task checker terminated unexpectedly");
+                }
+                Err(_) => {
+                    debug!("Draining timeout reached");
+                }
+            }
+        } else {
+            // Without timeout: wait indefinitely for all tasks to complete
             let mut check_interval = tokio::time::interval(Duration::from_secs(1));
 
             loop {
                 check_interval.tick().await;
 
-                let guard = stages.lock().await;
+                let guard = self.stages.lock().await;
                 let mut all_tasks_completed = true;
 
                 for (stage_id, stage_state) in guard.iter() {
@@ -143,24 +186,38 @@ impl DistRuntime {
                 drop(guard);
 
                 if all_tasks_completed {
-                    let _ = tx.send(true);
+                    debug!("All tasks completed");
                     break;
                 }
             }
-        });
-
-        // Wait for either timeout or task completion
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(_)) => {
-                debug!("All tasks completed, exiting gracefully");
-            }
-            Ok(Err(_)) => {
-                debug!("Task checker terminated unexpectedly");
-            }
-            Err(_) => {
-                debug!("Graceful exit timeout reached, exiting");
-            }
         }
+    }
+
+    /// Set node status to Exited and perform cleanup
+    /// This should be called after draining and waiting for tasks to complete
+    /// Stops heartbeat and marks node as exited
+    pub async fn exit(&self) {
+        self.heartbeater
+            .set_status(crate::cluster::NodeStatus::Exited)
+            .await;
+        debug!("Node status set to Exited, performing cleanup");
+
+        // Stop heartbeat
+        // Note: The heartbeat task will continue running but will report Exited status
+        // The node will be removed from the cluster after heartbeat timeout
+    }
+
+    /// Graceful exit: drain, wait for tasks, then exit
+    /// This is a convenience method that combines draining + wait + exit
+    /// 1. Sets node status to Draining, so no new tasks are assigned
+    /// 2. Waits for running tasks to complete or until timeout
+    /// 3. Sets node status to Exited
+    pub async fn graceful_exit(&self, timeout: Option<Duration>) {
+        // Step 1: Drain and wait for tasks
+        self.draining(timeout).await;
+
+        // Step 2: Exit
+        self.exit().await;
     }
 
     pub async fn submit(
@@ -316,12 +373,13 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        // Check if node is in Draining status, if so, reject new tasks
+        // Check if node is in Draining or Exited status, if so, reject new tasks
         let current_status = self.heartbeater.get_status().await;
-        if matches!(current_status, crate::cluster::NodeStatus::Draining) {
-            return Err(DistError::internal(
-                "Node is in Draining status, rejecting new tasks",
-            ));
+        if !matches!(current_status, crate::cluster::NodeStatus::Available) {
+            return Err(DistError::internal(format!(
+                "Node is in {:?} status, rejecting new tasks",
+                current_status
+            )));
         }
 
         debug!(

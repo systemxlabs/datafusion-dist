@@ -32,6 +32,7 @@ pub enum NodeStatus {
     #[default]
     Available,
     Draining,
+    Exited,
 }
 
 impl NodeStatus {
@@ -39,6 +40,7 @@ impl NodeStatus {
         match self {
             NodeStatus::Available => "Available",
             NodeStatus::Draining => "Draining",
+            NodeStatus::Exited => "Exited",
         }
     }
 }
@@ -50,6 +52,7 @@ impl TryFrom<&str> for NodeStatus {
         match value {
             "Available" => Ok(NodeStatus::Available),
             "Draining" => Ok(NodeStatus::Draining),
+            "Exited" => Ok(NodeStatus::Exited),
             _ => Err(format!("Unknown NodeStatus: {}", value)),
         }
     }
