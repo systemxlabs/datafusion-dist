@@ -5,7 +5,7 @@ use bb8_postgres::PostgresConnectionManager;
 use bb8_postgres::tokio_postgres::NoTls;
 use datafusion_dist::{
     DistResult,
-    cluster::{DistCluster, NodeId, NodeState},
+    cluster::{DistCluster, NodeId, NodeState, NodeStatus},
     util::timestamp_ms,
 };
 use log::{debug, trace};
@@ -153,6 +153,7 @@ impl DistCluster for PostgresCluster {
             };
 
             let node_state = NodeState {
+                status: NodeStatus::Running,
                 total_memory: row
                     .try_get::<_, i64>(2)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?

@@ -27,8 +27,16 @@ impl Display for NodeId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum NodeStatus {
+    #[default]
+    Running,
+    GracefulExit,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeState {
+    pub status: NodeStatus,
     pub total_memory: u64,
     pub used_memory: u64,
     pub free_memory: u64,

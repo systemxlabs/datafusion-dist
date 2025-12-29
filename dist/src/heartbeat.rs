@@ -4,7 +4,7 @@ use log::error;
 use tokio::sync::Mutex;
 
 use crate::{
-    cluster::{DistCluster, NodeId, NodeState},
+    cluster::{DistCluster, NodeId, NodeState, NodeStatus},
     planner::StageId,
     runtime::StageState,
 };
@@ -15,6 +15,7 @@ pub struct Heartbeater {
     pub cluster: Arc<dyn DistCluster>,
     pub stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
     pub heartbeat_interval: Duration,
+    pub status: Arc<Mutex<NodeStatus>>,
 }
 
 impl Heartbeater {
@@ -29,7 +30,16 @@ impl Heartbeater {
             cluster,
             stages,
             heartbeat_interval,
+            status: Arc::new(Mutex::new(NodeStatus::Running)),
         }
+    }
+
+    pub async fn set_status(&self, status: NodeStatus) {
+        *self.status.lock().await = status;
+    }
+
+    pub async fn get_status(&self) -> NodeStatus {
+        *self.status.lock().await
     }
 
     pub fn start(&self) {
@@ -37,6 +47,7 @@ impl Heartbeater {
         let cluster = self.cluster.clone();
         let stages = self.stages.clone();
         let heartbeat_interval = self.heartbeat_interval;
+        let status = self.status.clone();
 
         tokio::spawn(async move {
             let mut sys = sysinfo::System::new();
@@ -53,6 +64,7 @@ impl Heartbeater {
                 sys.refresh_cpu_usage();
 
                 let node_state = NodeState {
+                    status: *status.lock().await,
                     total_memory: sys.total_memory(),
                     used_memory: sys.used_memory(),
                     free_memory: sys.free_memory(),

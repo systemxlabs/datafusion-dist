@@ -3,6 +3,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -100,6 +101,53 @@ impl DistRuntime {
 
     pub async fn start(&self) {
         self.heartbeater.start();
+    }
+
+    /// Initiates graceful exit process:
+    /// 1. Sets node status to GracefulExit, so no new tasks are assigned
+    /// 2. Waits for running tasks to complete or until timeout
+    /// 3. Returns when all tasks are completed or timeout is reached
+    pub async fn graceful_exit(&self) {
+        // Set node status to GracefulExit
+        self.heartbeater
+            .set_status(crate::cluster::NodeStatus::GracefulExit)
+            .await;
+        debug!("Node status set to GracefulExit, no new tasks will be assigned");
+
+        // Wait for running tasks to complete or timeout
+        let start_time = std::time::Instant::now();
+        let timeout = self.config.graceful_exit_timeout;
+
+        loop {
+            let elapsed = start_time.elapsed();
+            if elapsed >= timeout {
+                debug!("Graceful exit timeout reached, exiting");
+                break;
+            }
+
+            // Check if all tasks are completed
+            let guard = self.stages.lock().await;
+            let mut all_tasks_completed = true;
+
+            for (stage_id, stage_state) in guard.iter() {
+                let running_tasks = stage_state.num_running_tasks().await;
+                if running_tasks > 0 {
+                    all_tasks_completed = false;
+                    debug!("Stage {stage_id} still has {running_tasks} running tasks, waiting...");
+                    break;
+                }
+            }
+
+            drop(guard);
+
+            if all_tasks_completed {
+                debug!("All tasks completed, exiting gracefully");
+                break;
+            }
+
+            // Wait a bit before checking again
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     pub async fn submit(
@@ -255,6 +303,14 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        // Check if node is in GracefulExit status, if so, reject new tasks
+        let current_status = self.heartbeater.get_status().await;
+        if matches!(current_status, crate::cluster::NodeStatus::GracefulExit) {
+            return Err(DistError::internal(
+                "Node is in GracefulExit status, rejecting new tasks",
+            ));
+        }
+
         debug!(
             "Received tasks: [{}] and plans of stages: [{}]",
             scheduled_tasks

@@ -4,6 +4,7 @@ use std::time::Duration;
 pub struct DistConfig {
     pub heartbeat_interval: Duration,
     pub stage0_task_poll_timeout: Duration,
+    pub graceful_exit_timeout: Duration,
 }
 
 impl DistConfig {
@@ -11,6 +12,7 @@ impl DistConfig {
         Self {
             heartbeat_interval: Duration::from_secs(20),
             stage0_task_poll_timeout: Duration::from_secs(10),
+            graceful_exit_timeout: Duration::from_secs(30),
         }
     }
 }
