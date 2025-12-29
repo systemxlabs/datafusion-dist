@@ -581,6 +581,8 @@ impl Drop for TaskStream {
             output_rows: self.output_rows,
             completed: self.completed,
         };
+        debug!("Task {task_id} dropped with metrics: {task_metrics:?}");
+
         let stage_state = self.stage_state.clone();
         let sender = self.event_sender.clone();
         tokio::spawn(async move {
