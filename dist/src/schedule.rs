@@ -78,7 +78,14 @@ impl DistSchedule for DefaultScheduler {
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
-        if node_states.is_empty() {
+        // Filter out nodes that are in Terminating status
+        let available_nodes: HashMap<NodeId, NodeState> = node_states
+            .iter()
+            .filter(|(_, state)| matches!(state.status, crate::cluster::NodeStatus::Available))
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect();
+
+        if available_nodes.is_empty() {
             return Err(DistError::schedule("No nodes available for scheduling"));
         }
 
@@ -101,12 +108,20 @@ impl DistSchedule for DefaultScheduler {
             }
 
             if is_plan_fully_pipelined(plan) {
-                let assignment =
-                    assign_stage_tasks_to_all_nodes(*stage_id, plan, node_states, &mut task_index);
+                let assignment = assign_stage_tasks_to_all_nodes(
+                    *stage_id,
+                    plan,
+                    &available_nodes,
+                    &mut task_index,
+                );
                 assignments.extend(assignment);
             } else {
-                let assignment =
-                    assign_stage_all_tasks_to_node(*stage_id, plan, node_states, &mut stage_index);
+                let assignment = assign_stage_all_tasks_to_node(
+                    *stage_id,
+                    plan,
+                    &available_nodes,
+                    &mut stage_index,
+                );
                 assignments.extend(assignment);
                 stage_index += 1;
             }
