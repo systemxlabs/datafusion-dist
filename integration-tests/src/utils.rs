@@ -77,15 +77,13 @@ pub async fn assert_planner(
     stage_plans
 }
 
-pub fn mock_alive_nodes() -> HashMap<NodeId, NodeState> {
+pub fn mock_alive_nodes() -> (NodeId, HashMap<NodeId, NodeState>) {
     let mut nodes = HashMap::new();
-    nodes.insert(
-        NodeId {
-            host: "localhost".to_string(),
-            port: 50060,
-        },
-        NodeState::default(),
-    );
+    let local_node = NodeId {
+        host: "localhost".to_string(),
+        port: 50060,
+    };
+    nodes.insert(local_node.clone(), NodeState::default());
     nodes.insert(
         NodeId {
             host: "localhost".to_string(),
@@ -100,14 +98,17 @@ pub fn mock_alive_nodes() -> HashMap<NodeId, NodeState> {
         },
         NodeState::default(),
     );
-    nodes
+    (local_node, nodes)
 }
 
 pub async fn schedule_tasks(
+    local_node: &NodeId,
     node_state: &HashMap<NodeId, NodeState>,
     stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
 ) -> DistResult<HashMap<TaskId, NodeId>> {
-    let distribution = DefaultScheduler.schedule(node_state, stage_plans).await?;
+    let distribution = DefaultScheduler::new()
+        .schedule(local_node, node_state, stage_plans)
+        .await?;
     println!(
         "Task distribution: {}",
         DisplayableTaskDistribution(&distribution)

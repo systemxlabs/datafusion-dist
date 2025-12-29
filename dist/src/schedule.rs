@@ -25,18 +25,41 @@ use crate::{
 pub trait DistSchedule: Debug + Send + Sync {
     async fn schedule(
         &self,
+        local_node: &NodeId,
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>>;
 }
 
-#[derive(Debug)]
-pub struct DefaultScheduler;
+pub type AssignSelfFn = Box<dyn Fn(&Arc<dyn ExecutionPlan>) -> bool + Send + Sync>;
+
+pub struct DefaultScheduler {
+    assign_self: Option<AssignSelfFn>,
+}
+
+impl DefaultScheduler {
+    pub fn new() -> Self {
+        DefaultScheduler { assign_self: None }
+    }
+}
+
+impl Debug for DefaultScheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultScheduler").finish()
+    }
+}
+
+impl Default for DefaultScheduler {
+    fn default() -> Self {
+        DefaultScheduler::new()
+    }
+}
 
 #[async_trait::async_trait]
 impl DistSchedule for DefaultScheduler {
     async fn schedule(
         &self,
+        local_node: &NodeId,
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
@@ -50,6 +73,17 @@ impl DistSchedule for DefaultScheduler {
         let mut task_index = 0;
 
         for (stage_id, plan) in stage_plans.iter() {
+            if let Some(assign_self) = &self.assign_self
+                && assign_self(plan)
+            {
+                let partition_count = plan.output_partitioning().partition_count();
+                for partition in 0..partition_count {
+                    let task_id = stage_id.task_id(partition as u32);
+                    assignments.insert(task_id, local_node.clone());
+                }
+                continue;
+            }
+
             if is_plan_fully_pipelined(plan) {
                 let assignment =
                     assign_stage_tasks_to_all_nodes(*stage_id, plan, node_states, &mut task_index);

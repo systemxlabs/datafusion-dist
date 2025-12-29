@@ -83,7 +83,7 @@ impl DistRuntime {
             cluster,
             network,
             planner: Arc::new(DefaultPlanner),
-            scheduler: Arc::new(DefaultScheduler),
+            scheduler: Arc::new(DefaultScheduler::new()),
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
@@ -124,7 +124,10 @@ impl DistRuntime {
                 .join(", ")
         );
 
-        let task_distribution = self.scheduler.schedule(&node_states, &stage_plans).await?;
+        let task_distribution = self
+            .scheduler
+            .schedule(&self.node_id, &node_states, &stage_plans)
+            .await?;
         debug!(
             "job {job_id} task distribution: {}",
             DisplayableTaskDistribution(&task_distribution)

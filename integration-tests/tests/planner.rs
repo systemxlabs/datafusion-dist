@@ -20,8 +20,8 @@ DataSourceExec: partitions=2, partition_sizes=[1, 1]
     )
     .await;
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_nodes(0, &distribution, 2);
     Ok(())
 }
@@ -43,8 +43,8 @@ CrossJoinExec
     )
     .await;
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_one_node(0, &distribution);
     Ok(())
 }
@@ -67,8 +67,8 @@ NestedLoopJoinExec: join_type=Inner, filter=age@0 > age@1
     )
     .await;
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_one_node(0, &distribution);
     Ok(())
 }
@@ -93,8 +93,8 @@ CoalesceBatchesExec: target_batch_size=8192
     )
     .await;
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_one_node(0, &distribution);
     Ok(())
 }
@@ -158,8 +158,8 @@ CoalesceBatchesExec: target_batch_size=8192
 "#,
     );
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
     assert_stage_distributed_into_one_node(1, &distribution);
     assert_stage_distributed_into_one_node(2, &distribution);
@@ -194,8 +194,8 @@ UnionExec
     )
     .await;
 
-    let nodes = mock_alive_nodes();
-    let distribution = schedule_tasks(&nodes, &stage_plans).await?;
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
     assert_stage_distributed_into_one_node(0, &distribution);
     assert_stage_distributed_into_nodes(1, &distribution, nodes.len());
 
