@@ -114,39 +114,50 @@ impl DistRuntime {
             .await;
         debug!("Node status set to GracefulExit, no new tasks will be assigned");
 
-        // Wait for running tasks to complete or timeout
-        let start_time = std::time::Instant::now();
         let timeout = self.config.graceful_exit_timeout;
 
-        loop {
-            let elapsed = start_time.elapsed();
-            if elapsed >= timeout {
-                debug!("Graceful exit timeout reached, exiting");
-                break;
-            }
+        // Spawn a background task to check task completion status
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let stages = self.stages.clone();
 
-            // Check if all tasks are completed
-            let guard = self.stages.lock().await;
-            let mut all_tasks_completed = true;
+        tokio::spawn(async move {
+            let mut check_interval = tokio::time::interval(Duration::from_secs(1));
 
-            for (stage_id, stage_state) in guard.iter() {
-                let running_tasks = stage_state.num_running_tasks().await;
-                if running_tasks > 0 {
-                    all_tasks_completed = false;
-                    debug!("Stage {stage_id} still has {running_tasks} running tasks, waiting...");
+            loop {
+                check_interval.tick().await;
+
+                let guard = stages.lock().await;
+                let mut all_tasks_completed = true;
+
+                for (stage_id, stage_state) in guard.iter() {
+                    let running_tasks = stage_state.num_running_tasks().await;
+                    if running_tasks > 0 {
+                        all_tasks_completed = false;
+                        debug!("Stage {stage_id} still has {running_tasks} running tasks, waiting...");
+                        break;
+                    }
+                }
+
+                drop(guard);
+
+                if all_tasks_completed {
+                    let _ = tx.send(true);
                     break;
                 }
             }
+        });
 
-            drop(guard);
-
-            if all_tasks_completed {
+        // Wait for either timeout or task completion
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(_)) => {
                 debug!("All tasks completed, exiting gracefully");
-                break;
             }
-
-            // Wait a bit before checking again
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok(Err(_)) => {
+                debug!("Task checker terminated unexpectedly");
+            }
+            Err(_) => {
+                debug!("Graceful exit timeout reached, exiting");
+            }
         }
     }
 
