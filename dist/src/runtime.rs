@@ -104,15 +104,15 @@ impl DistRuntime {
     }
 
     /// Initiates graceful exit process:
-    /// 1. Sets node status to GracefulExit, so no new tasks are assigned
+    /// 1. Sets node status to Draining, so no new tasks are assigned
     /// 2. Waits for running tasks to complete or until timeout
     /// 3. Returns when all tasks are completed or timeout is reached
     pub async fn graceful_exit(&self) {
-        // Set node status to GracefulExit
+        // Set node status to Draining
         self.heartbeater
-            .set_status(crate::cluster::NodeStatus::GracefulExit)
+            .set_status(crate::cluster::NodeStatus::Draining)
             .await;
-        debug!("Node status set to GracefulExit, no new tasks will be assigned");
+        debug!("Node status set to Draining, no new tasks will be assigned");
 
         let timeout = self.config.graceful_exit_timeout;
 
@@ -133,7 +133,9 @@ impl DistRuntime {
                     let running_tasks = stage_state.num_running_tasks().await;
                     if running_tasks > 0 {
                         all_tasks_completed = false;
-                        debug!("Stage {stage_id} still has {running_tasks} running tasks, waiting...");
+                        debug!(
+                            "Stage {stage_id} still has {running_tasks} running tasks, waiting..."
+                        );
                         break;
                     }
                 }
@@ -314,11 +316,11 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        // Check if node is in GracefulExit status, if so, reject new tasks
+        // Check if node is in Draining status, if so, reject new tasks
         let current_status = self.heartbeater.get_status().await;
-        if matches!(current_status, crate::cluster::NodeStatus::GracefulExit) {
+        if matches!(current_status, crate::cluster::NodeStatus::Draining) {
             return Err(DistError::internal(
-                "Node is in GracefulExit status, rejecting new tasks",
+                "Node is in Draining status, rejecting new tasks",
             ));
         }
 

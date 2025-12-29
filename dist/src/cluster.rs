@@ -30,8 +30,29 @@ impl Display for NodeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NodeStatus {
     #[default]
-    Running,
-    GracefulExit,
+    Available,
+    Draining,
+}
+
+impl NodeStatus {
+    pub fn to_str(self) -> &'static str {
+        match self {
+            NodeStatus::Available => "Available",
+            NodeStatus::Draining => "Draining",
+        }
+    }
+}
+
+impl TryFrom<&str> for NodeStatus {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "Available" => Ok(NodeStatus::Available),
+            "Draining" => Ok(NodeStatus::Draining),
+            _ => Err(format!("Unknown NodeStatus: {}", value)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

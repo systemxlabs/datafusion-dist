@@ -78,10 +78,10 @@ impl DistSchedule for DefaultScheduler {
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
-        // Filter out nodes that are in GracefulExit status
+        // Filter out nodes that are in Draining status
         let available_nodes: HashMap<NodeId, NodeState> = node_states
             .iter()
-            .filter(|(_, state)| matches!(state.status, crate::cluster::NodeStatus::Running))
+            .filter(|(_, state)| matches!(state.status, crate::cluster::NodeStatus::Available))
             .map(|(id, state)| (id.clone(), state.clone()))
             .collect();
 

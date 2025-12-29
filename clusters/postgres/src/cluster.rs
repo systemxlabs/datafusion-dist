@@ -40,6 +40,7 @@ impl PostgresCluster {
                      CREATE TABLE IF NOT EXISTS cluster_nodes (
                          host TEXT NOT NULL,
                          port INTEGER NOT NULL,
+                         status TEXT NOT NULL,
                          total_memory BIGINT NOT NULL,
                          used_memory BIGINT NOT NULL,
                          free_memory BIGINT NOT NULL,
@@ -79,19 +80,22 @@ impl DistCluster for PostgresCluster {
 
         let query = r#"
                    INSERT INTO cluster_nodes (
-                       host, port, total_memory, used_memory, free_memory,
+                       host, port, status, total_memory, used_memory, free_memory,
                        available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                    ON CONFLICT (host, port)
                    DO UPDATE SET
+                       status = EXCLUDED.status,
                        total_memory = EXCLUDED.total_memory,
                        used_memory = EXCLUDED.used_memory,
                        free_memory = EXCLUDED.free_memory,
                        available_memory = EXCLUDED.available_memory,
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
                        num_running_tasks = EXCLUDED.num_running_tasks,
-                       last_heartbeat = $9
+                       last_heartbeat = $10
                    "#;
+
+        let status_str = state.status.to_str();
 
         client
             .execute(
@@ -99,6 +103,7 @@ impl DistCluster for PostgresCluster {
                 &[
                     &node_id.host,
                     &(node_id.port as i32),
+                    &status_str,
                     &(state.total_memory as i64),
                     &(state.used_memory as i64),
                     &(state.free_memory as i64),
@@ -128,7 +133,7 @@ impl DistCluster for PostgresCluster {
         let rows = client
                         .query(
                             r#"
-                            SELECT host, port, total_memory, used_memory,
+                            SELECT host, port, status, total_memory, used_memory,
                                    free_memory, available_memory, global_cpu_usage, num_running_tasks
                             FROM cluster_nodes
                             WHERE last_heartbeat >= $1
@@ -152,29 +157,38 @@ impl DistCluster for PostgresCluster {
                 port: port as u16,
             };
 
+            let status_str: String = row
+                .try_get(2)
+                .map_err(|e| PostgresClusterError::Query(e.to_string()))?;
+
+            let status = NodeStatus::try_from(status_str.as_str()).unwrap_or_else(|_| {
+                debug!("Unknown status '{}', defaulting to Available", status_str);
+                NodeStatus::Available
+            });
+
             let node_state = NodeState {
-                status: NodeStatus::Running,
+                status,
                 total_memory: row
-                    .try_get::<_, i64>(2)
-                    .map_err(|e| PostgresClusterError::Query(e.to_string()))?
-                    as u64,
-                used_memory: row
                     .try_get::<_, i64>(3)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
-                free_memory: row
+                used_memory: row
                     .try_get::<_, i64>(4)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
-                available_memory: row
+                free_memory: row
                     .try_get::<_, i64>(5)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u64,
+                available_memory: row
+                    .try_get::<_, i64>(6)
+                    .map_err(|e| PostgresClusterError::Query(e.to_string()))?
+                    as u64,
                 global_cpu_usage: row
-                    .try_get(6)
+                    .try_get(7)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?,
                 num_running_tasks: row
-                    .try_get::<_, i32>(7)
+                    .try_get::<_, i32>(8)
                     .map_err(|e| PostgresClusterError::Query(e.to_string()))?
                     as u32,
             };

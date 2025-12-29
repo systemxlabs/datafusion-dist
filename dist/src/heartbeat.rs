@@ -30,7 +30,7 @@ impl Heartbeater {
             cluster,
             stages,
             heartbeat_interval,
-            status: Arc::new(Mutex::new(NodeStatus::Running)),
+            status: Arc::new(Mutex::new(NodeStatus::Available)),
         }
     }
 
