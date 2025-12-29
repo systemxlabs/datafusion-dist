@@ -5,6 +5,8 @@ edition.workspace = true
 homepage.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "A distributed streaming execution library for Apache DataFusion"
+readme = "../README.md"
 
 [dependencies]
 async-trait = { workspace = true }
