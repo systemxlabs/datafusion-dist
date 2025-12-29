@@ -167,7 +167,7 @@ CoalesceBatchesExec: target_batch_size=8192
 }
 
 #[tokio::test]
-async fn union() -> Result<(), Box<dyn std::error::Error>> {
+async fn union_aggregate() -> Result<(), Box<dyn std::error::Error>> {
     let stage_plans = assert_planner(
         "select * from simple union select * from simple",
         r#"AggregateExec: mode=FinalPartitioned, gby=[name@0 as name, age@1 as age], aggr=[]

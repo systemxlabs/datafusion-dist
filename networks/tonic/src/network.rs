@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_dist::{
@@ -94,9 +94,7 @@ impl DistNetwork for DistTonicNetwork {
     }
 
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        let channel = build_tonic_channel(node_id).await?;
-        let mut tonic_client =
-            DistTonicServiceClient::new(channel).max_encoding_message_size(usize::MAX);
+        let mut tonic_client = build_tonic_client(node_id).await?;
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
         tonic_client
             .send_tasks(send_tasks_req)
@@ -110,9 +108,7 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<RecordBatchStream> {
-        let channel = build_tonic_channel(node_id).await?;
-        let mut tonic_client =
-            DistTonicServiceClient::new(channel).max_decoding_message_size(usize::MAX);
+        let mut tonic_client = build_tonic_client(node_id).await?;
         let stream = tonic_client
             .execute_task(serialize_task_id(task_id))
             .await
@@ -125,8 +121,7 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         job_id: Option<Uuid>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
-        let channel = build_tonic_channel(node_id).await?;
-        let mut tonic_client = DistTonicServiceClient::new(channel);
+        let mut tonic_client = build_tonic_client(node_id).await?;
 
         let req = protobuf::GetJobStatusReq {
             job_id: job_id.map(|id| id.to_string()),
@@ -154,8 +149,7 @@ impl DistNetwork for DistTonicNetwork {
     }
 
     async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()> {
-        let channel = build_tonic_channel(node_id).await?;
-        let mut tonic_client = DistTonicServiceClient::new(channel);
+        let mut tonic_client = build_tonic_client(node_id).await?;
 
         let req = protobuf::CleanupJobReq {
             job_id: job_id.to_string(),
@@ -172,10 +166,19 @@ impl DistNetwork for DistTonicNetwork {
 
 async fn build_tonic_channel(node_id: NodeId) -> DistResult<Channel> {
     let addr = format!("http://{}:{}", node_id.host, node_id.port);
-    let endpoint = Endpoint::from_shared(addr).map_err(|e| DistError::network(Box::new(e)))?;
+    let endpoint = Endpoint::from_shared(addr)
+        .map_err(|e| DistError::network(Box::new(e)))?
+        .connect_timeout(Duration::from_secs(20));
     let channel = endpoint
         .connect()
         .await
         .map_err(|e| DistError::network(Box::new(e)))?;
     Ok(channel)
+}
+
+async fn build_tonic_client(node_id: NodeId) -> DistResult<DistTonicServiceClient<Channel>> {
+    let channel = build_tonic_channel(node_id).await?;
+    Ok(DistTonicServiceClient::new(channel)
+        .max_encoding_message_size(usize::MAX)
+        .max_decoding_message_size(usize::MAX))
 }

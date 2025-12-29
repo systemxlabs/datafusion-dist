@@ -5,6 +5,7 @@ use std::{
 };
 
 use datafusion::{
+    catalog::memory::{DataSourceExec, MemorySourceConfig},
     common::tree_node::{TreeNode, TreeNodeRecursion},
     physical_plan::{
         ExecutionPlan, ExecutionPlanProperties,
@@ -35,11 +36,15 @@ pub type AssignSelfFn = Box<dyn Fn(&Arc<dyn ExecutionPlan>) -> bool + Send + Syn
 
 pub struct DefaultScheduler {
     assign_self: Option<AssignSelfFn>,
+    memory_datasource_size_threshold: usize,
 }
 
 impl DefaultScheduler {
     pub fn new() -> Self {
-        DefaultScheduler { assign_self: None }
+        DefaultScheduler {
+            assign_self: None,
+            memory_datasource_size_threshold: 1024 * 1024,
+        }
     }
 }
 
@@ -76,11 +81,12 @@ impl DistSchedule for DefaultScheduler {
             if let Some(assign_self) = &self.assign_self
                 && assign_self(plan)
             {
-                let partition_count = plan.output_partitioning().partition_count();
-                for partition in 0..partition_count {
-                    let task_id = stage_id.task_id(partition as u32);
-                    assignments.insert(task_id, local_node.clone());
-                }
+                assignments.extend(assign_stage_tasks_to_self(*stage_id, plan, local_node));
+                continue;
+            }
+
+            if contains_large_memory_datasource(plan, self.memory_datasource_size_threshold) {
+                assignments.extend(assign_stage_tasks_to_self(*stage_id, plan, local_node));
                 continue;
             }
 
@@ -97,6 +103,37 @@ impl DistSchedule for DefaultScheduler {
         }
         Ok(assignments)
     }
+}
+
+pub fn contains_large_memory_datasource(plan: &Arc<dyn ExecutionPlan>, threshold: usize) -> bool {
+    let mut result = false;
+
+    plan.apply(|node| {
+        if let Some(datasource) = node.as_any().downcast_ref::<DataSourceExec>()
+            && let Some(memory) = datasource
+                .data_source()
+                .as_any()
+                .downcast_ref::<MemorySourceConfig>()
+        {
+            let size = memory
+                .partitions()
+                .iter()
+                .map(|partition| {
+                    partition
+                        .iter()
+                        .map(|batch| batch.get_array_memory_size())
+                        .sum::<usize>()
+                })
+                .sum::<usize>();
+            if size > threshold {
+                result = true;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("plan traversal should not fail");
+
+    result
 }
 
 pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -119,6 +156,22 @@ pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
     .expect("plan traversal should not fail");
 
     fully_pipelined
+}
+
+fn assign_stage_tasks_to_self(
+    stage_id: StageId,
+    plan: &Arc<dyn ExecutionPlan>,
+    local_node: &NodeId,
+) -> HashMap<TaskId, NodeId> {
+    let mut assignments = HashMap::new();
+    let partition_count = plan.output_partitioning().partition_count();
+
+    for partition in 0..partition_count {
+        let task_id = stage_id.task_id(partition as u32);
+        assignments.insert(task_id, local_node.clone());
+    }
+
+    assignments
 }
 
 fn assign_stage_tasks_to_all_nodes(
