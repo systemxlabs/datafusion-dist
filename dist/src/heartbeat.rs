@@ -63,7 +63,11 @@ impl Heartbeater {
             global_cpu_usage: sys.global_cpu_usage(),
             num_running_tasks: num_running_tasks as u32,
         };
-        if let Err(e) = self.cluster.heartbeat(self.node_id.clone(), node_state).await {
+        if let Err(e) = self
+            .cluster
+            .heartbeat(self.node_id.clone(), node_state)
+            .await
+        {
             error!("Failed to send heartbeat: {e}");
         }
     }
