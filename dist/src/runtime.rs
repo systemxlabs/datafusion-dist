@@ -115,6 +115,8 @@ impl DistRuntime {
             .await;
         debug!("Node status set to Draining, no new tasks will be assigned");
 
+        self.heartbeater.send_heartbeat().await;
+
         // Step 2: Wait for running tasks to complete or timeout
         if let Some(timeout) = timeout {
             // With timeout: spawn background task and wait for timeout or completion
@@ -202,9 +204,8 @@ impl DistRuntime {
             .await;
         debug!("Node status set to Exited, performing cleanup");
 
-        // Stop heartbeat
-        // Note: The heartbeat task will continue running but will report Exited status
-        // The node will be removed from the cluster after heartbeat timeout
+        self.heartbeater.send_heartbeat().await;
+        debug!("Sent final heartbeat with Exited status");
     }
 
     /// Graceful exit: drain, wait for tasks, then exit
