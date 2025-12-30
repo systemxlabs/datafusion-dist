@@ -27,8 +27,37 @@ impl Display for NodeId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum NodeStatus {
+    #[default]
+    Available,
+    Terminating,
+}
+
+impl Display for NodeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeStatus::Available => write!(f, "Available"),
+            NodeStatus::Terminating => write!(f, "Terminating"),
+        }
+    }
+}
+
+impl std::str::FromStr for NodeStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Available" => Ok(NodeStatus::Available),
+            "Terminating" => Ok(NodeStatus::Terminating),
+            _ => Err(format!("Unknown NodeStatus: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeState {
+    pub status: NodeStatus,
     pub total_memory: u64,
     pub used_memory: u64,
     pub free_memory: u64,

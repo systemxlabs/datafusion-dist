@@ -102,6 +102,17 @@ impl DistRuntime {
         self.heartbeater.start();
     }
 
+    /// Set node status to Terminating
+    pub async fn terminating(&self) {
+        // Set status to Terminating
+        self.heartbeater
+            .set_status(crate::cluster::NodeStatus::Terminating)
+            .await;
+        debug!("Node status set to Terminating, no new tasks will be assigned");
+
+        self.heartbeater.send_heartbeat().await;
+    }
+
     pub async fn submit(
         &self,
         plan: Arc<dyn ExecutionPlan>,
