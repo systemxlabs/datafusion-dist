@@ -106,8 +106,7 @@ impl DistRuntime {
         self.heartbeater.start();
     }
 
-    /// Set node status to Terminating
-    pub async fn terminating(&self) {
+    pub async fn shutdown(&self) {
         // Set status to Terminating
         *self.status.lock().await = NodeStatus::Terminating;
         debug!("Set node status to Terminating, no new tasks will be assigned");
