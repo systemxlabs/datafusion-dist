@@ -133,8 +133,12 @@ impl DistPlanner for DefaultPlanner {
 pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         matches!(hash_join.partition_mode(), PartitionMode::Partitioned)
-    } else if let Some(agg) = plan.as_any().downcast_ref::<AggregateExec>() {
-        matches!(agg.mode(), AggregateMode::Partial)
+    } else if plan.children().len() == 1 {
+        if let Some(agg) = plan.children()[0].as_any().downcast_ref::<AggregateExec>() {
+            matches!(agg.mode(), AggregateMode::Partial)
+        } else {
+            false
+        }
     } else {
         false
     }
