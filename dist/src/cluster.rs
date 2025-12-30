@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::DistResult;
+use crate::{DistError, DistResult};
 
 #[async_trait::async_trait]
 pub trait DistCluster: Debug + Send + Sync {
@@ -44,13 +44,13 @@ impl Display for NodeStatus {
 }
 
 impl std::str::FromStr for NodeStatus {
-    type Err = String;
+    type Err = DistError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Available" => Ok(NodeStatus::Available),
             "Terminating" => Ok(NodeStatus::Terminating),
-            _ => Err(format!("Unknown NodeStatus: {}", s)),
+            _ => Err(DistError::internal(format!("Unknown NodeStatus: {s}"))),
         }
     }
 }

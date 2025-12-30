@@ -95,15 +95,13 @@ impl DistCluster for PostgresCluster {
                        last_heartbeat = EXCLUDED.last_heartbeat
                    "#;
 
-        let status_str = state.status.to_string();
-
         client
             .execute(
                 query,
                 &[
                     &node_id.host,
                     &(node_id.port as i32),
-                    &status_str,
+                    &state.status.to_string(),
                     &(state.total_memory as i64),
                     &(state.used_memory as i64),
                     &(state.free_memory as i64),
@@ -161,10 +159,7 @@ impl DistCluster for PostgresCluster {
                 .try_get(2)
                 .map_err(|e| PostgresClusterError::Query(e.to_string()))?;
 
-            let status = status_str.parse::<NodeStatus>().unwrap_or_else(|_| {
-                debug!("Unknown status '{}', defaulting to Available", status_str);
-                NodeStatus::Available
-            });
+            let status = status_str.parse::<NodeStatus>()?;
 
             let node_state = NodeState {
                 status,

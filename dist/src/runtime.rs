@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, mpsc::Sender};
 
 use crate::{
     DistError, DistResult, RecordBatchStream,
-    cluster::{DistCluster, NodeId},
+    cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
     event::{Event, EventHandler, cleanup_job, local_job_status, start_event_handler},
     heartbeat::Heartbeater,
@@ -36,6 +36,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct DistRuntime {
     pub node_id: NodeId,
+    pub status: Arc<Mutex<NodeStatus>>,
     pub task_ctx: Arc<TaskContext>,
     pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
@@ -55,13 +56,15 @@ impl DistRuntime {
         network: Arc<dyn DistNetwork>,
     ) -> Self {
         let node_id = network.local_node();
+        let status = Arc::new(Mutex::new(NodeStatus::Available));
         let stages = Arc::new(Mutex::new(HashMap::new()));
-        let heartbeater = Heartbeater::new(
-            node_id.clone(),
-            cluster.clone(),
-            stages.clone(),
-            config.heartbeat_interval,
-        );
+        let heartbeater = Heartbeater {
+            node_id: node_id.clone(),
+            cluster: cluster.clone(),
+            stages: stages.clone(),
+            heartbeat_interval: config.heartbeat_interval,
+            status: status.clone(),
+        };
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(1024);
 
@@ -78,6 +81,7 @@ impl DistRuntime {
 
         Self {
             node_id: network.local_node(),
+            status: Arc::new(Mutex::new(NodeStatus::Available)),
             task_ctx,
             config,
             cluster,
@@ -105,10 +109,8 @@ impl DistRuntime {
     /// Set node status to Terminating
     pub async fn terminating(&self) {
         // Set status to Terminating
-        self.heartbeater
-            .set_status(crate::cluster::NodeStatus::Terminating)
-            .await;
-        debug!("Node status set to Terminating, no new tasks will be assigned");
+        *self.status.lock().await = NodeStatus::Terminating;
+        debug!("Set node status to Terminating, no new tasks will be assigned");
 
         self.heartbeater.send_heartbeat().await;
     }

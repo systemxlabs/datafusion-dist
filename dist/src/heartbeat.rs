@@ -19,29 +19,6 @@ pub struct Heartbeater {
 }
 
 impl Heartbeater {
-    pub fn new(
-        node_id: NodeId,
-        cluster: Arc<dyn DistCluster>,
-        stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
-        heartbeat_interval: Duration,
-    ) -> Self {
-        Heartbeater {
-            node_id,
-            cluster,
-            stages,
-            heartbeat_interval,
-            status: Arc::new(Mutex::new(NodeStatus::Available)),
-        }
-    }
-
-    pub async fn set_status(&self, status: NodeStatus) {
-        *self.status.lock().await = status;
-    }
-
-    pub async fn get_status(&self) -> NodeStatus {
-        *self.status.lock().await
-    }
-
     pub async fn send_heartbeat(&self) {
         let guard = self.stages.lock().await;
         let mut num_running_tasks = 0;
