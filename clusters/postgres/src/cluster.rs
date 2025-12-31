@@ -71,11 +71,6 @@ impl PostgresCluster {
 impl DistCluster for PostgresCluster {
     // Send heartbeat
     async fn heartbeat(&self, node_id: NodeId, state: NodeState) -> DistResult<()> {
-        debug!(
-            "Sending heartbeat for node {:?}, status: {:?}",
-            node_id, state.status
-        );
-
         // Get current timestamp in milliseconds as i64
         let timestamp = timestamp_ms();
 
