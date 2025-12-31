@@ -79,7 +79,7 @@ impl DistRuntime {
 
         Self {
             node_id: network.local_node(),
-            status: Arc::new(Mutex::new(NodeStatus::Available)),
+            status,
             task_ctx,
             config,
             cluster,
