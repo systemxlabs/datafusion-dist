@@ -8,11 +8,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use datafusion::{
-    arrow::array::RecordBatch,
-    execution::{SendableRecordBatchStream, TaskContext},
-    physical_plan::ExecutionPlan,
-};
+use arrow::array::RecordBatch;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::ExecutionPlan;
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};

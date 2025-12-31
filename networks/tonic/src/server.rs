@@ -1,9 +1,10 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 
-use datafusion::{physical_plan::ExecutionPlan, prelude::SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_dist::{
     DistResult, network::ScheduledTasks, planner::StageId, runtime::DistRuntime,
 };
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,

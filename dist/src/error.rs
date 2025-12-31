@@ -1,6 +1,7 @@
 use std::{error::Error, fmt::Display, panic::Location};
 
-use datafusion::{arrow::error::ArrowError, error::DataFusionError};
+use arrow::error::ArrowError;
+use datafusion_common::DataFusionError;
 use tokio::task::JoinError;
 
 pub type DistResult<T> = Result<T, DistError>;

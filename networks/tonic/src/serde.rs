@@ -2,8 +2,7 @@
 
 use std::collections::HashMap;
 
-use datafusion::arrow::{
-    self,
+use arrow::{
     array::RecordBatch,
     error::ArrowError,
     ipc::{reader::StreamReader, writer::StreamWriter},

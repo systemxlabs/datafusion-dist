@@ -4,15 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::{
-    catalog::memory::{DataSourceExec, MemorySourceConfig},
-    common::tree_node::{TreeNode, TreeNodeRecursion},
-    physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties,
-        coalesce_partitions::CoalescePartitionsExec,
-        joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
-        repartition::RepartitionExec,
-    },
+use datafusion_catalog::memory::{DataSourceExec, MemorySourceConfig};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties,
+    coalesce_partitions::CoalescePartitionsExec,
+    joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
+    repartition::RepartitionExec,
 };
 use itertools::Itertools;
 

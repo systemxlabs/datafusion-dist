@@ -11,7 +11,12 @@ description = "A Tonic network implementation for datafusion-dist"
 datafusion-dist = { workspace = true }
 
 async-trait = { workspace = true }
+arrow = { workspace = true }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 datafusion-proto = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }

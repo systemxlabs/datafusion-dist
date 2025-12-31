@@ -1364,8 +1364,12 @@ dependencies = [
 name = "datafusion-dist"
 version = "0.1.0"
 dependencies = [
+ "arrow 56.2.0",
  "async-trait",
- "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-physical-plan",
  "futures",
  "itertools 0.14.0",
  "local-ip-address",
@@ -1434,9 +1438,14 @@ dependencies = [
 name = "datafusion-dist-network-tonic"
 version = "0.1.0"
 dependencies = [
+ "arrow 56.2.0",
  "async-trait",
  "datafusion",
+ "datafusion-common",
  "datafusion-dist",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-plan",
  "datafusion-proto",
  "futures",
  "prost 0.13.5",

@@ -4,14 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::{
-    common::tree_node::{Transformed, TreeNode},
-    physical_plan::{
-        ExecutionPlan, ExecutionPlanProperties,
-        aggregates::{AggregateExec, AggregateMode},
-        display::DisplayableExecutionPlan,
-        joins::{HashJoinExec, PartitionMode},
-    },
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties,
+    aggregates::{AggregateExec, AggregateMode},
+    display::DisplayableExecutionPlan,
+    joins::{HashJoinExec, PartitionMode},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -166,7 +164,7 @@ pub fn check_initial_stage_plans(
             if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
                 depended_stages.insert(unresolved.delegated_stage_id);
             }
-            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+            Ok(TreeNodeRecursion::Continue)
         })?;
     }
 

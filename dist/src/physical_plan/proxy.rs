@@ -1,13 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use datafusion::{
-    arrow::datatypes::SchemaRef,
-    error::DataFusionError,
-    execution::{SendableRecordBatchStream, TaskContext},
-    physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-        stream::RecordBatchStreamAdapter,
-    },
+use arrow::datatypes::SchemaRef;
+use datafusion_common::DataFusionError;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    stream::RecordBatchStreamAdapter,
 };
 use futures::{StreamExt, TryStreamExt};
 

@@ -14,7 +14,7 @@ use std::pin::Pin;
 
 pub use error::{DistError, DistResult};
 
-use datafusion::arrow::array::RecordBatch;
+use arrow::array::RecordBatch;
 use futures::Stream;
 
 pub type RecordBatchStream = Pin<Box<dyn Stream<Item = DistResult<RecordBatch>> + Send>>;

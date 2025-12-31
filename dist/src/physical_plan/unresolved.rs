@@ -1,10 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::{
-    error::DataFusionError,
-    execution::{SendableRecordBatchStream, TaskContext},
-    physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties},
-};
+use datafusion_common::DataFusionError;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use crate::planner::StageId;
 

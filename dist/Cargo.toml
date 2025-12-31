@@ -10,7 +10,11 @@ readme = "../README.md"
 
 [dependencies]
 async-trait = { workspace = true }
-datafusion = { workspace = true }
+arrow = { workspace = true }
+datafusion-catalog = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 local-ip-address = { workspace = true }

@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_dist::{
     DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
@@ -8,6 +7,7 @@ use datafusion_dist::{
     planner::{StageId, TaskId},
     util::get_local_ip,
 };
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,

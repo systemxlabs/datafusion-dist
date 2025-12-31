@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_physical_plan::ExecutionPlan;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

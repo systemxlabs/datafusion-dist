@@ -1,18 +1,16 @@
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use datafusion::{
-    arrow::datatypes::SchemaRef,
-    error::DataFusionError,
-    execution::FunctionRegistry,
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        ExecutionPlan, PlanProperties,
-        execution_plan::{Boundedness, EmissionType},
-    },
-    prelude::SessionContext,
-};
+use arrow::datatypes::SchemaRef;
+use datafusion::prelude::SessionContext;
+use datafusion_common::DataFusionError;
 use datafusion_dist::{
     cluster::NodeId, physical_plan::ProxyExec, planner::TaskId, runtime::DistRuntime,
+};
+use datafusion_expr::registry::FunctionRegistry;
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_plan::{
+    ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 use datafusion_proto::{
     convert_required,
