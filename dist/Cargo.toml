@@ -23,3 +23,4 @@ serde = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
+
