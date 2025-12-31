@@ -10,6 +10,7 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     display::DisplayableExecutionPlan,
     joins::{HashJoinExec, PartitionMode},
+    sorts::sort::SortExec,
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -134,6 +135,8 @@ pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
     } else if plan.children().len() == 1 {
         if let Some(agg) = plan.children()[0].as_any().downcast_ref::<AggregateExec>() {
             matches!(agg.mode(), AggregateMode::Partial)
+        } else if let Some(sort) = plan.children()[0].as_any().downcast_ref::<SortExec>() {
+            sort.preserve_partitioning()
         } else {
             false
         }

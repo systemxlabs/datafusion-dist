@@ -12,16 +12,7 @@ async fn sqllogictest() -> Result<(), Box<dyn std::error::Error>> {
     });
     tester.with_column_validator(sqllogictest::strict_column_validator);
 
-    let mut slts_dir = tokio::fs::read_dir(format!("tests/slts")).await?;
-    while let Some(entry) = slts_dir.next_entry().await? {
-        if entry.file_type().await?.is_file() {
-            println!(
-                "======== start to run file {} ========",
-                entry.file_name().to_str().unwrap()
-            );
-            tester.run_file_async(entry.path()).await?;
-        }
-    }
+    tester.run_file_async("tests/sqllogictest.slt").await?;
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 

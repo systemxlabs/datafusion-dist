@@ -201,3 +201,28 @@ AggregateExec: mode=Partial, gby=[name@0 as name, age@1 as age], aggr=[]
 
     Ok(())
 }
+
+#[tokio::test]
+async fn sort_with_preserve_partitioning() -> Result<(), Box<dyn std::error::Error>> {
+    let stage_plans = assert_planner(
+        "select * from simple order by age",
+        r#"SortPreservingMergeExec: [age@1 ASC NULLS LAST]
+  SortExec: expr=[age@1 ASC NULLS LAST], preserve_partitioning=[true]
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+        r#"===============Stage 0 (partitions=1)===============
+SortPreservingMergeExec: [age@1 ASC NULLS LAST]
+  UnresolvedExec: delegated_plan=SortExec, delegated_stage=1
+===============Stage 1 (partitions=2)===============
+SortExec: expr=[age@1 ASC NULLS LAST], preserve_partitioning=[true]
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+    )
+    .await;
+
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
+    assert_stage_distributed_into_one_node(0, &distribution);
+    assert_stage_distributed_into_nodes(1, &distribution, 2);
+    Ok(())
+}

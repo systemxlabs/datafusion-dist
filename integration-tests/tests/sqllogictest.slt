@@ -1,3 +1,10 @@
+# Full table scan
+query TI rowsort
+select * from simple
+----
+Alice 25
+Bob 30
+
 # Cross join
 query TITI rowsort
 select * from simple as t1 join simple as t2
@@ -40,3 +47,17 @@ set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
 
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold_rows = 131072;
+
+# Union aggregate
+query TI rowsort
+select * from simple union select * from simple
+----
+Alice 25
+Bob 30
+
+# Sort with preserve partitioning
+query TI
+select * from simple order by age
+----
+Alice 25
+Bob 30

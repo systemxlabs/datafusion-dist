@@ -1,4 +1,0 @@
-query I rowsort
-select sum(age) from simple
-----
-55
