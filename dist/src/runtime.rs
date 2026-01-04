@@ -284,6 +284,7 @@ impl DistRuntime {
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         let mut guard = self.stages.lock().await;
         guard.extend(stage_states);
+        drop(guard);
 
         let stage0_ids = stage_ids
             .iter()
@@ -449,15 +450,22 @@ impl StageState {
         }
 
         let mut guard = self.task_sets.lock().await;
+        let mut target_task_set = None;
         for task_set in guard.iter_mut() {
             if !task_set.never_executed(&partition) {
                 task_set.running_partitions.insert(partition);
-
-                let df_stream = task_set.shared_plan.execute(partition, task_ctx)?;
-                return Ok((task_set.id, df_stream));
+                target_task_set = Some((task_set.id, task_set.shared_plan.clone()));
+                break;
             }
         }
+        drop(guard);
 
+        if let Some((task_set_id, shared_plan)) = target_task_set {
+            let df_stream = shared_plan.execute(partition, task_ctx)?;
+            return Ok((task_set_id, df_stream));
+        }
+
+        let mut guard = self.task_sets.lock().await;
         let task_set_id = Uuid::new_v4();
         let mut new_task_set = TaskSet {
             id: task_set_id,

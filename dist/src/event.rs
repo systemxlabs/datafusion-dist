@@ -93,20 +93,26 @@ impl EventHandler {
         let sender = self.sender.clone();
         tokio::spawn(async move {
             tokio::time::sleep(stage0_task_poll_timeout).await;
+
             let stages_guard = local_stages.lock().await;
+            let mut timeout_stage0_id = None;
             for stage_id in stage0_ids {
                 if let Some(stage) = stages_guard.get(&stage_id)
                     && stage.never_executed().await
                 {
                     debug!("Found stage0 {stage_id} never polled until timeout");
-
-                    if let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await {
-                        error!(
-                            "Failed to send CleanupJob event for job {}: {e}",
-                            stage_id.job_id
-                        );
-                    }
+                    timeout_stage0_id = Some(stage_id);
                     break;
+                }
+            }
+            drop(stages_guard);
+
+            if let Some(stage_id) = timeout_stage0_id {
+                if let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await {
+                    error!(
+                        "Failed to send CleanupJob event for job {}: {e}",
+                        stage_id.job_id
+                    );
                 }
             }
         });
