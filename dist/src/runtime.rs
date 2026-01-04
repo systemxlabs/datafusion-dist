@@ -302,10 +302,6 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub async fn get_local_job_status(&self, job_id: Option<Uuid>) -> HashMap<StageId, StageInfo> {
-        local_job_status(&self.stages, job_id).await
-    }
-
     pub async fn cleanup_local_job(&self, job_id: Uuid) {
         debug!("Cleaning up local Job {job_id}");
         let mut guard = self.stages.lock().await;
@@ -323,9 +319,17 @@ impl DistRuntime {
         .await
     }
 
+    pub async fn get_local_job(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
+        local_job_status(&self.stages, Some(job_id)).await
+    }
+
+    pub async fn get_local_jobs(&self) -> HashMap<StageId, StageInfo> {
+        local_job_status(&self.stages, None).await
+    }
+
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
-        let mut combined_status = self.get_local_job_status(None).await;
+        let mut combined_status = self.get_local_jobs().await;
 
         // Then, get status from all other alive nodes
         let node_states = self.cluster.alive_nodes().await?;

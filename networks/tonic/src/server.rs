@@ -113,15 +113,14 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
-        let job_id = match request.into_inner().job_id {
-            Some(id) => Some(
-                Uuid::parse_str(&id)
-                    .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?,
-            ),
-            None => None,
+        let status = match request.into_inner().job_id {
+            Some(id) => {
+                let job_id = Uuid::parse_str(&id)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
+                self.runtime.get_local_job(job_id).await
+            }
+            None => self.runtime.get_local_jobs().await,
         };
-
-        let status = self.runtime.get_local_job_status(job_id).await;
 
         let stage_infos = status
             .into_iter()
