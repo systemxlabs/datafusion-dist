@@ -120,7 +120,7 @@ pub async fn check_job_completed(
     job_id: Uuid,
 ) -> DistResult<Option<bool>> {
     // First, get local status
-    let mut combined_status = local_job_status(local_stages, Some(job_id)).await;
+    let mut combined_status = local_stage_stats(local_stages, Some(job_id)).await;
 
     // Then, get status from all other alive nodes
     let node_states = cluster.alive_nodes().await?;
@@ -175,7 +175,7 @@ pub async fn check_job_completed(
     Ok(Some(true))
 }
 
-pub async fn local_job_status(
+pub async fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
     job_id: Option<Uuid>,
 ) -> HashMap<StageId, StageInfo> {

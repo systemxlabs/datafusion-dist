@@ -20,7 +20,7 @@ use crate::{
     DistError, DistResult, RecordBatchStream,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
-    event::{Event, EventHandler, cleanup_job, local_job_status, start_event_handler},
+    event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{
@@ -320,16 +320,27 @@ impl DistRuntime {
     }
 
     pub async fn get_local_job(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
-        local_job_status(&self.stages, Some(job_id)).await
+        local_stage_stats(&self.stages, Some(job_id)).await
     }
 
-    pub async fn get_local_jobs(&self) -> HashMap<StageId, StageInfo> {
-        local_job_status(&self.stages, None).await
+    pub async fn get_local_jobs(&self) -> HashMap<Uuid, HashMap<StageId, StageInfo>> {
+        let stage_stat = local_stage_stats(&self.stages, None).await;
+
+        // Aggregate stats by job_id
+        let mut job_stats: HashMap<Uuid, HashMap<StageId, StageInfo>> = HashMap::new();
+        for (stage_id, stage_info) in stage_stat {
+            job_stats
+                .entry(stage_id.job_id)
+                .or_default()
+                .insert(stage_id, stage_info);
+        }
+
+        job_stats
     }
 
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
-        let mut combined_status = self.get_local_jobs().await;
+        let mut combined_status = local_stage_stats(&self.stages, None).await;
 
         // Then, get status from all other alive nodes
         let node_states = self.cluster.alive_nodes().await?;

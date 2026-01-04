@@ -2,7 +2,10 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use datafusion::prelude::SessionContext;
 use datafusion_dist::{
-    DistResult, network::ScheduledTasks, planner::StageId, runtime::DistRuntime,
+    DistResult,
+    network::{ScheduledTasks, StageInfo},
+    planner::StageId,
+    runtime::DistRuntime,
 };
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::{
@@ -113,13 +116,19 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
-        let status = match request.into_inner().job_id {
+        let status: HashMap<StageId, StageInfo> = match request.into_inner().job_id {
             Some(id) => {
                 let job_id = Uuid::parse_str(&id)
                     .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
                 self.runtime.get_local_job(job_id).await
             }
-            None => self.runtime.get_local_jobs().await,
+            None => self
+                .runtime
+                .get_local_jobs()
+                .await
+                .into_values()
+                .flatten()
+                .collect(),
         };
 
         let stage_infos = status
