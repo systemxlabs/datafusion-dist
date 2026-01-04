@@ -11,11 +11,11 @@ datafusion-dist enables distributed query execution for DataFusion, allowing you
 
 ## Features
 
-- 🚀 Distributed streaming execution for DataFusion queries
-- 🔌 Pluggable cluster management (PostgreSQL support)
-- 🌐 Pluggable network layer (Tonic support)
-- 📋 Extensible planner for custom planning stages
-- ⏱️ Extensible scheduler for custom task scheduling
+- Distributed streaming execution for DataFusion queries
+- Pluggable cluster management (PostgreSQL support)
+- Pluggable network layer (Tonic support)
+- Extensible planner for custom planning stages
+- Extensible scheduler for custom task scheduling
 
 ## Project Structure
 
@@ -32,8 +32,3 @@ datafusion-dist/
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Links
-
-- [GitHub Repository](https://github.com/systemxlabs/datafusion-dist)
-- [Apache DataFusion](https://datafusion.apache.org/)
