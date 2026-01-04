@@ -107,13 +107,13 @@ impl EventHandler {
             }
             drop(stages_guard);
 
-            if let Some(stage_id) = timeout_stage0_id {
-                if let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await {
-                    error!(
-                        "Failed to send CleanupJob event for job {}: {e}",
-                        stage_id.job_id
-                    );
-                }
+            if let Some(stage_id) = timeout_stage0_id
+                && let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await
+            {
+                error!(
+                    "Failed to send CleanupJob event for job {}: {e}",
+                    stage_id.job_id
+                );
             }
         });
     }
