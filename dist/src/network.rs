@@ -54,6 +54,7 @@ impl ScheduledTasks {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageInfo {
+    pub create_at_ms: i64,
     pub assigned_partitions: HashSet<usize>,
     pub task_set_infos: Vec<TaskSetInfo>,
 }
@@ -69,6 +70,7 @@ impl StageInfo {
             .collect();
 
         StageInfo {
+            create_at_ms: stage_state.create_at_ms,
             assigned_partitions: stage_state.assigned_partitions.clone(),
             task_set_infos,
         }

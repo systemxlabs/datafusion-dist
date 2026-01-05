@@ -50,9 +50,11 @@ pub struct GetJobStatusResp {
 pub struct StageInfo {
     #[prost(message, optional, tag = "1")]
     pub stage_id: ::core::option::Option<StageId>,
-    #[prost(uint32, repeated, tag = "2")]
+    #[prost(int64, tag = "2")]
+    pub created_at_ms: i64,
+    #[prost(uint32, repeated, tag = "3")]
     pub assigned_partitions: ::prost::alloc::vec::Vec<u32>,
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag = "4")]
     pub task_set_infos: ::prost::alloc::vec::Vec<TaskSetInfo>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
