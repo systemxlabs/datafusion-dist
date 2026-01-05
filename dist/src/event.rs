@@ -98,7 +98,7 @@ impl EventHandler {
             let mut timeout_stage0_id = None;
             for stage_id in stage0_ids {
                 if let Some(stage) = stages_guard.get(&stage_id)
-                    && stage.never_executed().await
+                    && stage.never_executed()
                 {
                     debug!("Found stage0 {stage_id} never polled until timeout");
                     timeout_stage0_id = Some(stage_id);

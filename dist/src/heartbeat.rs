@@ -23,7 +23,7 @@ impl Heartbeater {
         let guard = self.stages.lock().await;
         let mut num_running_tasks = 0;
         for (_, state) in guard.iter() {
-            num_running_tasks += state.num_running_tasks().await;
+            num_running_tasks += state.num_running_tasks();
         }
         drop(guard);
 

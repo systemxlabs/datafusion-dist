@@ -232,7 +232,7 @@ impl DistRuntime {
         let stage_state = guard
             .get_mut(&stage_id)
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
-        let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize).await?;
+        let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize)?;
         drop(guard);
 
         let stream = plan
@@ -435,17 +435,14 @@ impl StageState {
         Ok(stage_states)
     }
 
-    pub async fn num_running_tasks(&self) -> usize {
+    pub fn num_running_tasks(&self) -> usize {
         self.task_sets
             .iter()
             .map(|task_set| task_set.running_partitions.len())
             .sum()
     }
 
-    pub async fn get_plan(
-        &mut self,
-        partition: usize,
-    ) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
+    pub fn get_plan(&mut self, partition: usize) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
         if !self.assigned_partitions.contains(&partition) {
             let task_id = self.stage_id.task_id(partition as u32);
             return Err(DistError::internal(format!(
@@ -474,12 +471,7 @@ impl StageState {
         Ok((task_set_id, shared_plan))
     }
 
-    pub async fn complete_task(
-        &mut self,
-        task_id: TaskId,
-        task_set_id: Uuid,
-        task_metrics: TaskMetrics,
-    ) {
+    pub fn complete_task(&mut self, task_id: TaskId, task_set_id: Uuid, task_metrics: TaskMetrics) {
         if let Some(task_set) = self
             .task_sets
             .iter_mut()
@@ -494,7 +486,7 @@ impl StageState {
         }
     }
 
-    pub async fn assigned_partitions_executed_at_least_once(&self) -> bool {
+    pub fn assigned_partitions_executed_at_least_once(&self) -> bool {
         let executed_partitions = self
             .task_sets
             .iter()
@@ -513,7 +505,7 @@ impl StageState {
         true
     }
 
-    pub async fn never_executed(&self) -> bool {
+    pub fn never_executed(&self) -> bool {
         self.task_sets
             .iter()
             .all(|set| set.running_partitions.is_empty() && set.dropped_partitions.is_empty())
@@ -610,13 +602,9 @@ impl Drop for TaskStream {
         tokio::spawn(async move {
             let mut guard = stages.lock().await;
             if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
-                stage_state
-                    .complete_task(task_id, task_set_id, task_metrics)
-                    .await;
+                stage_state.complete_task(task_id, task_set_id, task_metrics);
                 if stage_state.stage_id.stage == 0
-                    && stage_state
-                        .assigned_partitions_executed_at_least_once()
-                        .await
+                    && stage_state.assigned_partitions_executed_at_least_once()
                     && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
                 {
                     error!(
