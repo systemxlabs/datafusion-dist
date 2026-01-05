@@ -12,7 +12,7 @@ use arrow::array::RecordBatch;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::ExecutionPlan;
 
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use log::{debug, error};
 use tokio::sync::{Mutex, mpsc::Sender};
 
@@ -28,7 +28,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
-    util::timestamp_ms,
+    util::{CpuRuntime, ReceiverStreamBuilder, timestamp_ms},
 };
 
 #[derive(Debug, Clone)]
@@ -44,6 +44,7 @@ pub struct DistRuntime {
     pub heartbeater: Arc<Heartbeater>,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
+    pub cpu_runtime: Arc<CpuRuntime>,
 }
 
 impl DistRuntime {
@@ -77,6 +78,8 @@ impl DistRuntime {
         };
         start_event_handler(event_handler);
 
+        let cpu_runtime = Arc::new(CpuRuntime::new());
+
         Self {
             node_id: network.local_node(),
             status,
@@ -89,6 +92,7 @@ impl DistRuntime {
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
+            cpu_runtime,
         }
     }
 
@@ -235,10 +239,32 @@ impl DistRuntime {
         let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize)?;
         drop(guard);
 
-        let stream = plan
-            .execute(task_id.partition as usize, self.task_ctx.clone())?
-            .map_err(DistError::from)
-            .boxed();
+        let mut receiver_stream_builder = ReceiverStreamBuilder::new(2);
+
+        let tx = receiver_stream_builder.tx();
+        let partition = task_id.partition as usize;
+        let task_ctx = self.task_ctx.clone();
+        let driver_task = async move {
+            let mut df_stream = plan.execute(partition, task_ctx)?;
+
+            // Calling `next()` to drive the plan in this task drives the
+            // execution from the cpu runtime the other thread pool
+            //
+            // NOTE any IO run by this plan (for example, reading from an
+            // `ObjectStore`) will be done on this new thread pool as well.
+            while let Some(batch) = df_stream.next().await {
+                let batch = batch.map_err(DistError::from);
+                if tx.send(batch).await.is_err() {
+                    // error means dropped receiver, so nothing will get results anymore
+                    return Ok(());
+                }
+            }
+            Ok(()) as DistResult<()>
+        };
+
+        receiver_stream_builder.spawn_on(driver_task, self.cpu_runtime.handle());
+
+        let stream = receiver_stream_builder.build();
 
         let task_stream = TaskStream::new(
             task_id,
@@ -629,16 +655,19 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
                     to_cleanup.push(*stage_id);
                 }
             }
-            debug!(
-                "Stages [{}] lifetime exceed job ttl {}s, cleaning up.",
-                to_cleanup
-                    .iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                config.job_ttl.as_secs()
-            );
-            guard.retain(|stage_id, _| !to_cleanup.contains(stage_id));
+
+            if !to_cleanup.is_empty() {
+                debug!(
+                    "Stages [{}] lifetime exceed job ttl {}s, cleaning up.",
+                    to_cleanup
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    config.job_ttl.as_secs()
+                );
+                guard.retain(|stage_id, _| !to_cleanup.contains(stage_id));
+            }
             drop(guard);
         }
     });
