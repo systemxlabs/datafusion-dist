@@ -630,7 +630,7 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
                 }
             }
             debug!(
-                "Stages [{}] lifetime exceed job ttl {}, cleaning up.",
+                "Stages [{}] lifetime exceed job ttl {}s, cleaning up.",
                 to_cleanup
                     .iter()
                     .map(|id| id.to_string())
