@@ -5,6 +5,8 @@ pub struct SendTasksReq {
     pub stage_plans: ::prost::alloc::vec::Vec<StagePlan>,
     #[prost(message, repeated, tag = "2")]
     pub tasks: ::prost::alloc::vec::Vec<TaskId>,
+    #[prost(message, optional, tag = "3")]
+    pub job_task_distribution: ::core::option::Option<TaskDistribution>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct SendTasksResp {}

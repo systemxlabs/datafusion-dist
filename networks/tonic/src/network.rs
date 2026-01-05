@@ -21,7 +21,7 @@ use crate::{
     protobuf::{self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient},
     serde::{
         parse_record_batch_res, parse_stage_id, parse_stage_info, serialize_stage_id,
-        serialize_task_id,
+        serialize_task_distribution, serialize_task_id,
     },
 };
 
@@ -64,6 +64,9 @@ impl DistTonicNetwork {
         Ok(SendTasksReq {
             stage_plans: proto_stage_plans,
             tasks: proto_task_ids,
+            job_task_distribution: Some(serialize_task_distribution(
+                &scheduled_tasks.job_task_distribution,
+            )),
         })
     }
 

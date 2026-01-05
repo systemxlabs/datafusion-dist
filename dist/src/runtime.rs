@@ -193,7 +193,8 @@ impl DistRuntime {
 
             let tasks = node_tasks.get(&node_id).cloned().unwrap_or_default();
 
-            let scheduled_tasks = ScheduledTasks::new(node_stage_plans, tasks);
+            let scheduled_tasks =
+                ScheduledTasks::new(node_stage_plans, tasks, Arc::new(task_distribution.clone()));
 
             if node_id == self.node_id {
                 self.receive_tasks(scheduled_tasks).await?;
@@ -266,20 +267,22 @@ impl DistRuntime {
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
         debug!(
-            "Received tasks: [{}] and plans of stages: [{}]",
+            "Received job {} tasks: [{}] and plans of stages: [{}]",
+            scheduled_tasks.job_id()?,
             scheduled_tasks
                 .task_ids
                 .iter()
-                .map(|t| t.to_string())
+                .map(|t| format!("{}/{}", t.stage, t.partition))
                 .collect::<Vec<String>>()
                 .join(", "),
             scheduled_tasks
                 .stage_plans
                 .keys()
-                .map(|k| k.to_string())
+                .map(|k| k.stage.to_string())
                 .collect::<Vec<String>>()
                 .join(", ")
         );
+
         let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         let mut guard = self.stages.lock().await;
@@ -394,6 +397,7 @@ pub struct StageState {
     pub stage_plan: Arc<dyn ExecutionPlan>,
     pub assigned_partitions: HashSet<usize>,
     pub task_sets: Mutex<Vec<TaskSet>>,
+    pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
 }
 
 impl StageState {
@@ -423,6 +427,7 @@ impl StageState {
                     .map(|task_id| task_id.partition as usize)
                     .collect(),
                 task_sets: Mutex::new(Vec::new()),
+                job_task_distribution: scheduled_tasks.job_task_distribution.clone(),
             };
             stage_states.insert(stage_id, Arc::new(stage_state));
         }

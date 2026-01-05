@@ -1,11 +1,9 @@
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
 use datafusion_common::DataFusionError;
-use datafusion_dist::{
-    cluster::NodeId, physical_plan::ProxyExec, planner::TaskId, runtime::DistRuntime,
-};
+use datafusion_dist::{physical_plan::ProxyExec, runtime::DistRuntime};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::{
@@ -21,9 +19,11 @@ use prost::Message;
 
 use crate::{
     protobuf::{
-        self, DistPhysicalPlanNode, ProxyExecNode, dist_physical_plan_node::DistPhysicalPlanType,
+        DistPhysicalPlanNode, ProxyExecNode, dist_physical_plan_node::DistPhysicalPlanType,
     },
-    serde::{parse_stage_id, parse_task_id, serialize_stage_id, serialize_task_id},
+    serde::{
+        parse_stage_id, parse_task_distribution, serialize_stage_id, serialize_task_distribution,
+    },
 };
 
 #[derive(Debug)]
@@ -162,54 +162,5 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
         Err(DataFusionError::NotImplemented(
             "DistPhysicalExtensionDecoder::try_encode is not implemented".to_string(),
         ))
-    }
-}
-
-fn parse_task_distribution(proto: protobuf::TaskDistribution) -> HashMap<TaskId, NodeId> {
-    let mut task_distribution = HashMap::new();
-    for task in proto.distribution {
-        let (task_id, node_id) = parse_task_node(task);
-        task_distribution.insert(task_id, node_id);
-    }
-    task_distribution
-}
-
-fn parse_task_node(proto: protobuf::TaskNode) -> (TaskId, NodeId) {
-    let task_id = parse_task_id(proto.task_id.expect("task_id is none"));
-    let node_id = parse_node_id(proto.node_id.expect("node_id is none"));
-    (task_id, node_id)
-}
-
-fn parse_node_id(proto: protobuf::NodeId) -> NodeId {
-    NodeId {
-        host: proto.host,
-        port: proto.port as u16,
-    }
-}
-
-fn serialize_task_distribution(
-    task_distribution: &HashMap<TaskId, NodeId>,
-) -> protobuf::TaskDistribution {
-    let mut task_nodes = Vec::new();
-    for (task_id, node_id) in task_distribution {
-        let task_node = serialize_task_node(*task_id, node_id.clone());
-        task_nodes.push(task_node);
-    }
-    protobuf::TaskDistribution {
-        distribution: task_nodes,
-    }
-}
-
-fn serialize_node_id(node_id: NodeId) -> protobuf::NodeId {
-    protobuf::NodeId {
-        host: node_id.host,
-        port: node_id.port as u32,
-    }
-}
-
-fn serialize_task_node(task_id: TaskId, node_id: NodeId) -> protobuf::TaskNode {
-    protobuf::TaskNode {
-        task_id: Some(serialize_task_id(task_id)),
-        node_id: Some(serialize_node_id(node_id)),
     }
 }

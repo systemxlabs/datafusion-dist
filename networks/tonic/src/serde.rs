@@ -9,6 +9,7 @@ use arrow::{
 };
 use datafusion_dist::{
     DistError, DistResult,
+    cluster::NodeId,
     network::{StageInfo, TaskSetInfo},
     planner::{StageId, TaskId},
     runtime::TaskMetrics,
@@ -206,4 +207,65 @@ pub fn serialize_record_batch_result(
         .finish()
         .map_err(|e| Status::internal(format!("Failed to finish stream writer: {e}")))?;
     Ok(protobuf::RecordBatch { data })
+}
+
+// ============================================================================
+// Task distribution HashMap<TaskId, NodeId> serialization/parsing
+// ============================================================================
+
+pub fn serialize_task_distribution(
+    task_distribution: &HashMap<TaskId, NodeId>,
+) -> protobuf::TaskDistribution {
+    let mut task_nodes = Vec::new();
+    for (task_id, node_id) in task_distribution {
+        let task_node = serialize_task_node(*task_id, node_id.clone());
+        task_nodes.push(task_node);
+    }
+    protobuf::TaskDistribution {
+        distribution: task_nodes,
+    }
+}
+
+pub fn parse_task_distribution(proto: protobuf::TaskDistribution) -> HashMap<TaskId, NodeId> {
+    let mut task_distribution = HashMap::new();
+    for task in proto.distribution {
+        let (task_id, node_id) = parse_task_node(task);
+        task_distribution.insert(task_id, node_id);
+    }
+    task_distribution
+}
+
+// ============================================================================
+// NodeId serialization/parsing
+// ============================================================================
+
+pub fn parse_node_id(proto: protobuf::NodeId) -> NodeId {
+    NodeId {
+        host: proto.host,
+        port: proto.port as u16,
+    }
+}
+
+pub fn serialize_node_id(node_id: NodeId) -> protobuf::NodeId {
+    protobuf::NodeId {
+        host: node_id.host,
+        port: node_id.port as u32,
+    }
+}
+
+// ============================================================================
+// (TaskId, NodeId) serialization/parsing
+// ============================================================================
+
+pub fn parse_task_node(proto: protobuf::TaskNode) -> (TaskId, NodeId) {
+    let task_id = parse_task_id(proto.task_id.expect("task_id is none"));
+    let node_id = parse_node_id(proto.node_id.expect("node_id is none"));
+    (task_id, node_id)
+}
+
+pub fn serialize_task_node(task_id: TaskId, node_id: NodeId) -> protobuf::TaskNode {
+    protobuf::TaskNode {
+        task_id: Some(serialize_task_id(task_id)),
+        node_id: Some(serialize_node_id(node_id)),
+    }
 }

@@ -22,7 +22,10 @@ use crate::{
         self, CleanupJobReq, CleanupJobResp, GetJobStatusReq, GetJobStatusResp, SendTasksReq,
         SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
     },
-    serde::{parse_stage_id, parse_task_id, serialize_record_batch_result, serialize_stage_info},
+    serde::{
+        parse_stage_id, parse_task_distribution, parse_task_id, serialize_record_batch_result,
+        serialize_stage_info,
+    },
 };
 
 pub struct DistTonicServer {
@@ -62,7 +65,15 @@ impl DistTonicServer {
             .map(|p| self.parse_stage_plan(p))
             .collect::<DistResult<HashMap<_, _>>>()?;
         let task_ids = req.tasks.into_iter().map(parse_task_id).collect::<Vec<_>>();
-        Ok(ScheduledTasks::new(stage_plans, task_ids))
+        let job_task_distribution = parse_task_distribution(
+            req.job_task_distribution
+                .expect("job task distribution is none"),
+        );
+        Ok(ScheduledTasks::new(
+            stage_plans,
+            task_ids,
+            Arc::new(job_task_distribution),
+        ))
     }
 
     fn parse_stage_plan(&self, proto: StagePlan) -> DistResult<(StageId, Arc<dyn ExecutionPlan>)> {

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    DistResult, RecordBatchStream,
+    DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
     planner::{StageId, TaskId},
     runtime::{StageState, TaskMetrics, TaskSet},
@@ -38,17 +38,27 @@ pub trait DistNetwork: Debug + Send + Sync {
 pub struct ScheduledTasks {
     pub stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
     pub task_ids: Vec<TaskId>,
+    pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
 }
 
 impl ScheduledTasks {
     pub fn new(
         stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
         task_ids: Vec<TaskId>,
+        job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     ) -> Self {
         ScheduledTasks {
             stage_plans,
             task_ids,
+            job_task_distribution,
         }
+    }
+
+    pub fn job_id(&self) -> DistResult<Uuid> {
+        self.task_ids
+            .first()
+            .map(|task_id| task_id.job_id)
+            .ok_or_else(|| DistError::internal("ScheduledTasks has no task_ids".to_string()))
     }
 }
 
