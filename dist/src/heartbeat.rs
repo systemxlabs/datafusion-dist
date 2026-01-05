@@ -1,7 +1,10 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use log::error;
-use tokio::sync::Mutex;
 
 use crate::{
     cluster::{DistCluster, NodeId, NodeState, NodeStatus},
@@ -20,19 +23,21 @@ pub struct Heartbeater {
 
 impl Heartbeater {
     pub async fn send_heartbeat(&self) {
-        let guard = self.stages.lock().await;
         let mut num_running_tasks = 0;
-        for (_, state) in guard.iter() {
-            num_running_tasks += state.num_running_tasks();
+        {
+            let guard = self.stages.lock().unwrap();
+            for (_, state) in guard.iter() {
+                num_running_tasks += state.num_running_tasks();
+            }
+            drop(guard);
         }
-        drop(guard);
 
         let mut sys = sysinfo::System::new();
         sys.refresh_memory();
         sys.refresh_cpu_usage();
 
         let node_state = NodeState {
-            status: *self.status.lock().await,
+            status: *self.status.lock().unwrap(),
             total_memory: sys.total_memory(),
             used_memory: sys.used_memory(),
             free_memory: sys.free_memory(),

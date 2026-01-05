@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
@@ -14,7 +14,7 @@ use datafusion_physical_plan::ExecutionPlan;
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
-use tokio::sync::{Mutex, mpsc::Sender};
+use tokio::sync::mpsc::Sender;
 
 use crate::{
     DistError, DistResult, RecordBatchStream,
@@ -107,7 +107,7 @@ impl DistRuntime {
 
     pub async fn shutdown(&self) {
         // Set status to Terminating
-        *self.status.lock().await = NodeStatus::Terminating;
+        *self.status.lock().unwrap() = NodeStatus::Terminating;
         debug!("Set node status to Terminating, no new tasks will be assigned");
 
         self.heartbeater.send_heartbeat().await;
@@ -228,7 +228,7 @@ impl DistRuntime {
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
         let stage_id = task_id.stage_id();
 
-        let mut guard = self.stages.lock().await;
+        let mut guard = self.stages.lock().unwrap();
         let stage_state = guard
             .get_mut(&stage_id)
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
@@ -286,9 +286,11 @@ impl DistRuntime {
 
         let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
-        let mut guard = self.stages.lock().await;
-        guard.extend(stage_states);
-        drop(guard);
+        {
+            let mut guard = self.stages.lock().unwrap();
+            guard.extend(stage_states);
+            drop(guard);
+        }
 
         let stage0_ids = stage_ids
             .iter()
@@ -307,9 +309,9 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub async fn cleanup_local_job(&self, job_id: Uuid) {
+    pub fn cleanup_local_job(&self, job_id: Uuid) {
         debug!("Cleaning up local Job {job_id}");
-        let mut guard = self.stages.lock().await;
+        let mut guard = self.stages.lock().unwrap();
         guard.retain(|stage_id, _| stage_id.job_id != job_id);
     }
 
@@ -324,12 +326,12 @@ impl DistRuntime {
         .await
     }
 
-    pub async fn get_local_job(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
-        local_stage_stats(&self.stages, Some(job_id)).await
+    pub fn get_local_job(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
+        local_stage_stats(&self.stages, Some(job_id))
     }
 
-    pub async fn get_local_jobs(&self) -> HashMap<Uuid, HashMap<StageId, StageInfo>> {
-        let stage_stat = local_stage_stats(&self.stages, None).await;
+    pub fn get_local_jobs(&self) -> HashMap<Uuid, HashMap<StageId, StageInfo>> {
+        let stage_stat = local_stage_stats(&self.stages, None);
 
         // Aggregate stats by job_id
         let mut job_stats: HashMap<Uuid, HashMap<StageId, StageInfo>> = HashMap::new();
@@ -345,7 +347,7 @@ impl DistRuntime {
 
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
-        let mut combined_status = local_stage_stats(&self.stages, None).await;
+        let mut combined_status = local_stage_stats(&self.stages, None);
 
         // Then, get status from all other alive nodes
         let node_states = self.cluster.alive_nodes().await?;
@@ -600,17 +602,25 @@ impl Drop for TaskStream {
         let stages = self.stages.clone();
         let sender = self.event_sender.clone();
         tokio::spawn(async move {
-            let mut guard = stages.lock().await;
-            if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
-                stage_state.complete_task(task_id, task_set_id, task_metrics);
-                if stage_state.stage_id.stage == 0
-                    && stage_state.assigned_partitions_executed_at_least_once()
-                    && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
-                {
-                    error!(
-                        "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
-                    );
+            let mut send_event = false;
+            {
+                let mut guard = stages.lock().unwrap();
+                if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
+                    stage_state.complete_task(task_id, task_set_id, task_metrics);
+                    if stage_state.stage_id.stage == 0
+                        && stage_state.assigned_partitions_executed_at_least_once()
+                    {
+                        send_event = true;
+                    }
                 }
+            }
+
+            if send_event
+                && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
+            {
+                error!(
+                    "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
+                );
             }
         });
     }
@@ -621,7 +631,7 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
         loop {
             tokio::time::sleep(config.job_ttl_check_interval).await;
 
-            let mut guard = stages.lock().await;
+            let mut guard = stages.lock().unwrap();
             let mut to_cleanup = Vec::new();
             for (stage_id, stage_state) in guard.iter() {
                 let age_ms = timestamp_ms() - stage_state.create_at_ms;
