@@ -1370,6 +1370,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-physical-plan",
+ "derive-with",
  "futures",
  "itertools 0.14.0",
  "local-ip-address",
@@ -1868,6 +1869,17 @@ dependencies = [
  "recursive",
  "regex",
  "sqlparser",
+]
+
+[[package]]
+name = "derive-with"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3428de1e57117de0813975a73ed5bfaa85bcae07982db0d7bb782ebdfa18692"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

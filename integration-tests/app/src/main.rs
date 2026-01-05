@@ -1,6 +1,6 @@
 pub mod table;
 
-use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc};
+use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc, time::Duration};
 
 use table::RunningJobsTable;
 
@@ -45,7 +45,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let ctx = build_session_context();
 
-    let config = DistConfig::default();
+    let config = DistConfig::default()
+        .with_job_ttl(Duration::from_secs(60))
+        .with_job_ttl_check_interval(Duration::from_secs(3));
 
     let runtime = DistRuntime::new(
         ctx.task_ctx(),

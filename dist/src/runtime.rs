@@ -102,6 +102,7 @@ impl DistRuntime {
 
     pub async fn start(&self) {
         self.heartbeater.start();
+        start_job_cleaner(self.stages.clone(), self.config.clone());
     }
 
     pub async fn shutdown(&self) {
@@ -639,4 +640,35 @@ impl Drop for TaskStream {
             }
         });
     }
+}
+
+fn start_job_cleaner(
+    stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    config: Arc<DistConfig>,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(config.job_ttl_check_interval).await;
+
+            let mut guard = stages.lock().await;
+            let mut to_cleanup = Vec::new();
+            for (stage_id, stage_state) in guard.iter() {
+                let age_ms = timestamp_ms() - stage_state.create_at_ms;
+                if age_ms >= config.job_ttl.as_millis() as i64 {
+                    to_cleanup.push(*stage_id);
+                }
+            }
+            debug!(
+                "Stages [{}] lifetime exceed job ttl {}, cleaning up.",
+                to_cleanup
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                config.job_ttl.as_secs()
+            );
+            guard.retain(|stage_id, _| !to_cleanup.contains(stage_id));
+            drop(guard);
+        }
+    });
 }
