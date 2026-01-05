@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use arrow::array::RecordBatch;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_execution::TaskContext;
 use datafusion_physical_plan::ExecutionPlan;
 
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -42,7 +42,7 @@ pub struct DistRuntime {
     pub planner: Arc<dyn DistPlanner>,
     pub scheduler: Arc<dyn DistSchedule>,
     pub heartbeater: Arc<Heartbeater>,
-    pub stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
 }
 
@@ -228,22 +228,22 @@ impl DistRuntime {
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
         let stage_id = task_id.stage_id();
 
-        let guard = self.stages.lock().await;
+        let mut guard = self.stages.lock().await;
         let stage_state = guard
-            .get(&stage_id)
-            .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?
-            .clone();
+            .get_mut(&stage_id)
+            .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
+        let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize).await?;
         drop(guard);
 
-        let (task_set_id, df_stream) = stage_state
-            .execute(task_id.partition as usize, self.task_ctx.clone())
-            .await?;
-        let stream = df_stream.map_err(DistError::from).boxed();
+        let stream = plan
+            .execute(task_id.partition as usize, self.task_ctx.clone())?
+            .map_err(DistError::from)
+            .boxed();
 
         let task_stream = TaskStream::new(
             task_id,
             task_set_id,
-            stage_state,
+            self.stages.clone(),
             self.event_sender.clone(),
             stream,
         );
@@ -397,14 +397,14 @@ pub struct StageState {
     pub create_at_ms: i64,
     pub stage_plan: Arc<dyn ExecutionPlan>,
     pub assigned_partitions: HashSet<usize>,
-    pub task_sets: Mutex<Vec<TaskSet>>,
+    pub task_sets: Vec<TaskSet>,
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
 }
 
 impl StageState {
     pub fn from_scheduled_tasks(
         scheduled_tasks: ScheduledTasks,
-    ) -> DistResult<HashMap<StageId, Arc<StageState>>> {
+    ) -> DistResult<HashMap<StageId, StageState>> {
         let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
         for task_id in scheduled_tasks.task_ids {
             let stage_id = task_id.stage_id();
@@ -427,27 +427,25 @@ impl StageState {
                     .iter()
                     .map(|task_id| task_id.partition as usize)
                     .collect(),
-                task_sets: Mutex::new(Vec::new()),
+                task_sets: Vec::new(),
                 job_task_distribution: scheduled_tasks.job_task_distribution.clone(),
             };
-            stage_states.insert(stage_id, Arc::new(stage_state));
+            stage_states.insert(stage_id, stage_state);
         }
         Ok(stage_states)
     }
 
     pub async fn num_running_tasks(&self) -> usize {
-        let guard = self.task_sets.lock().await;
-        guard
+        self.task_sets
             .iter()
             .map(|task_set| task_set.running_partitions.len())
             .sum()
     }
 
-    pub async fn execute(
-        &self,
+    pub async fn get_plan(
+        &mut self,
         partition: usize,
-        task_ctx: Arc<TaskContext>,
-    ) -> DistResult<(Uuid, SendableRecordBatchStream)> {
+    ) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
         if !self.assigned_partitions.contains(&partition) {
             let task_id = self.stage_id.task_id(partition as u32);
             return Err(DistError::internal(format!(
@@ -455,23 +453,13 @@ impl StageState {
             )));
         }
 
-        let mut guard = self.task_sets.lock().await;
-        let mut target_task_set = None;
-        for task_set in guard.iter_mut() {
+        for task_set in self.task_sets.iter_mut() {
             if !task_set.never_executed(&partition) {
                 task_set.running_partitions.insert(partition);
-                target_task_set = Some((task_set.id, task_set.shared_plan.clone()));
-                break;
+                return Ok((task_set.id, task_set.shared_plan.clone()));
             }
         }
-        drop(guard);
 
-        if let Some((task_set_id, shared_plan)) = target_task_set {
-            let df_stream = shared_plan.execute(partition, task_ctx)?;
-            return Ok((task_set_id, df_stream));
-        }
-
-        let mut guard = self.task_sets.lock().await;
         let task_set_id = Uuid::new_v4();
         let mut new_task_set = TaskSet {
             id: task_set_id,
@@ -481,22 +469,22 @@ impl StageState {
         };
         new_task_set.running_partitions.insert(partition);
         let shared_plan = new_task_set.shared_plan.clone();
-        guard.push(new_task_set);
-        drop(guard);
+        self.task_sets.push(new_task_set);
 
-        let df_stream = shared_plan.execute(partition, task_ctx)?;
-
-        Ok((task_set_id, df_stream))
+        Ok((task_set_id, shared_plan))
     }
 
     pub async fn complete_task(
-        &self,
+        &mut self,
         task_id: TaskId,
         task_set_id: Uuid,
         task_metrics: TaskMetrics,
     ) {
-        let mut guard = self.task_sets.lock().await;
-        if let Some(task_set) = guard.iter_mut().find(|task_set| task_set.id == task_set_id) {
+        if let Some(task_set) = self
+            .task_sets
+            .iter_mut()
+            .find(|task_set| task_set.id == task_set_id)
+        {
             task_set
                 .running_partitions
                 .remove(&(task_id.partition as usize));
@@ -507,8 +495,8 @@ impl StageState {
     }
 
     pub async fn assigned_partitions_executed_at_least_once(&self) -> bool {
-        let guard = self.task_sets.lock().await;
-        let executed_partitions = guard
+        let executed_partitions = self
+            .task_sets
             .iter()
             .flat_map(|task_set| {
                 let mut executed = task_set.running_partitions.clone();
@@ -516,7 +504,6 @@ impl StageState {
                 executed
             })
             .collect::<HashSet<_>>();
-        drop(guard);
 
         for partition in self.assigned_partitions.iter() {
             if !executed_partitions.contains(partition) {
@@ -527,13 +514,9 @@ impl StageState {
     }
 
     pub async fn never_executed(&self) -> bool {
-        let guard = self.task_sets.lock().await;
-        let never_executed = guard
+        self.task_sets
             .iter()
-            .all(|set| set.running_partitions.is_empty() && set.dropped_partitions.is_empty());
-        drop(guard);
-
-        never_executed
+            .all(|set| set.running_partitions.is_empty() && set.dropped_partitions.is_empty())
     }
 }
 
@@ -562,7 +545,7 @@ pub struct TaskMetrics {
 pub struct TaskStream {
     pub task_id: TaskId,
     pub task_set_id: Uuid,
-    pub stage_state: Arc<StageState>,
+    pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
     pub stream: RecordBatchStream,
     pub output_rows: usize,
@@ -574,14 +557,14 @@ impl TaskStream {
     pub fn new(
         task_id: TaskId,
         task_set_id: Uuid,
-        stage_state: Arc<StageState>,
+        stages: Arc<Mutex<HashMap<StageId, StageState>>>,
         event_sender: Sender<Event>,
         stream: RecordBatchStream,
     ) -> Self {
         Self {
             task_id,
             task_set_id,
-            stage_state,
+            stages,
             event_sender,
             stream,
             output_rows: 0,
@@ -622,30 +605,30 @@ impl Drop for TaskStream {
         };
         debug!("Task {task_id} dropped with metrics: {task_metrics:?}");
 
-        let stage_state = self.stage_state.clone();
+        let stages = self.stages.clone();
         let sender = self.event_sender.clone();
         tokio::spawn(async move {
-            stage_state
-                .complete_task(task_id, task_set_id, task_metrics)
-                .await;
-            if stage_state.stage_id.stage == 0
-                && stage_state
-                    .assigned_partitions_executed_at_least_once()
-                    .await
-                && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
-            {
-                error!(
-                    "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
-                );
+            let mut guard = stages.lock().await;
+            if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
+                stage_state
+                    .complete_task(task_id, task_set_id, task_metrics)
+                    .await;
+                if stage_state.stage_id.stage == 0
+                    && stage_state
+                        .assigned_partitions_executed_at_least_once()
+                        .await
+                    && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
+                {
+                    error!(
+                        "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
+                    );
+                }
             }
         });
     }
 }
 
-fn start_job_cleaner(
-    stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
-    config: Arc<DistConfig>,
-) {
+fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: Arc<DistConfig>) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(config.job_ttl_check_interval).await;

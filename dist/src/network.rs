@@ -73,8 +73,6 @@ impl StageInfo {
     pub async fn from_stage_state(stage_state: &StageState) -> Self {
         let task_set_infos = stage_state
             .task_sets
-            .lock()
-            .await
             .iter()
             .map(TaskSetInfo::from_task_set)
             .collect();

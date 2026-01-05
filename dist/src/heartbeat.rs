@@ -13,7 +13,7 @@ use crate::{
 pub struct Heartbeater {
     pub node_id: NodeId,
     pub cluster: Arc<dyn DistCluster>,
-    pub stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub heartbeat_interval: Duration,
     pub status: Arc<Mutex<NodeStatus>>,
 }

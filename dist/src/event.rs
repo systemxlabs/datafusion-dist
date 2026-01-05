@@ -34,7 +34,7 @@ pub struct EventHandler {
     pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
-    pub local_stages: Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    pub local_stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub sender: Sender<Event>,
     pub receiver: Receiver<Event>,
 }
@@ -122,7 +122,7 @@ impl EventHandler {
 pub async fn check_job_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
-    local_stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: Uuid,
 ) -> DistResult<Option<bool>> {
     // First, get local status
@@ -182,7 +182,7 @@ pub async fn check_job_completed(
 }
 
 pub async fn local_stage_stats(
-    stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: Option<Uuid>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock().await;
@@ -202,7 +202,7 @@ pub async fn cleanup_job(
     local_node: &NodeId,
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
-    local_stages: &Arc<Mutex<HashMap<StageId, Arc<StageState>>>>,
+    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: Uuid,
 ) -> DistResult<()> {
     let alive_nodes = cluster.alive_nodes().await?;
