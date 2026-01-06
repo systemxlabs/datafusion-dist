@@ -21,7 +21,7 @@ use crate::{
 };
 
 #[async_trait::async_trait]
-pub trait DistSchedule: Debug + Send + Sync {
+pub trait DistScheduler: Debug + Send + Sync {
     async fn schedule(
         &self,
         local_node: &NodeId,
@@ -69,7 +69,7 @@ impl Default for DefaultScheduler {
 }
 
 #[async_trait::async_trait]
-impl DistSchedule for DefaultScheduler {
+impl DistScheduler for DefaultScheduler {
     async fn schedule(
         &self,
         local_node: &NodeId,

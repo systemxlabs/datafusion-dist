@@ -13,7 +13,7 @@ use datafusion_dist::{
     DistResult,
     cluster::{NodeId, NodeState},
     planner::{DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId},
-    schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
+    scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
 };
 use futures::TryStreamExt;
 use tonic::transport::Endpoint;

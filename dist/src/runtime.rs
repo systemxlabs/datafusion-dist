@@ -29,7 +29,7 @@ use crate::{
         DefaultPlanner, DisplayableStagePlans, DistPlanner, StageId, TaskId,
         check_initial_stage_plans, resolve_stage_plan,
     },
-    schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
+    scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
     util::{ReceiverStreamBuilder, timestamp_ms},
 };
 
@@ -42,7 +42,7 @@ pub struct DistRuntime {
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
     pub planner: Arc<dyn DistPlanner>,
-    pub scheduler: Arc<dyn DistSchedule>,
+    pub scheduler: Arc<dyn DistScheduler>,
     pub executor: Arc<dyn DistExecutor>,
     pub heartbeater: Arc<Heartbeater>,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
@@ -100,7 +100,7 @@ impl DistRuntime {
         Self { planner, ..self }
     }
 
-    pub fn with_scheduler(self, scheduler: Arc<dyn DistSchedule>) -> Self {
+    pub fn with_scheduler(self, scheduler: Arc<dyn DistScheduler>) -> Self {
         Self { scheduler, ..self }
     }
 

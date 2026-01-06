@@ -21,7 +21,7 @@ use datafusion::{
 };
 use datafusion_dist::{
     cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime,
-    schedule::DefaultScheduler,
+    scheduler::DefaultScheduler,
 };
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
 use datafusion_dist_integration_tests::data::build_session_context;
