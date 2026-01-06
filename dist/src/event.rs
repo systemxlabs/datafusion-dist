@@ -1,10 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use log::{debug, error};
-use tokio::sync::{
-    Mutex,
-    mpsc::{Receiver, Sender},
-};
+use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::{
@@ -94,18 +94,20 @@ impl EventHandler {
         tokio::spawn(async move {
             tokio::time::sleep(stage0_task_poll_timeout).await;
 
-            let stages_guard = local_stages.lock().await;
             let mut timeout_stage0_id = None;
-            for stage_id in stage0_ids {
-                if let Some(stage) = stages_guard.get(&stage_id)
-                    && stage.never_executed()
-                {
-                    debug!("Found stage0 {stage_id} never polled until timeout");
-                    timeout_stage0_id = Some(stage_id);
-                    break;
+            {
+                let stages_guard = local_stages.lock().unwrap();
+                for stage_id in stage0_ids {
+                    if let Some(stage) = stages_guard.get(&stage_id)
+                        && stage.never_executed()
+                    {
+                        debug!("Found stage0 {stage_id} never polled until timeout");
+                        timeout_stage0_id = Some(stage_id);
+                        break;
+                    }
                 }
+                drop(stages_guard);
             }
-            drop(stages_guard);
 
             if let Some(stage_id) = timeout_stage0_id
                 && let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await
@@ -126,7 +128,7 @@ pub async fn check_job_completed(
     job_id: Uuid,
 ) -> DistResult<Option<bool>> {
     // First, get local status
-    let mut combined_status = local_stage_stats(local_stages, Some(job_id)).await;
+    let mut combined_status = local_stage_stats(local_stages, Some(job_id));
 
     // Then, get status from all other alive nodes
     let node_states = cluster.alive_nodes().await?;
@@ -181,16 +183,16 @@ pub async fn check_job_completed(
     Ok(Some(true))
 }
 
-pub async fn local_stage_stats(
+pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: Option<Uuid>,
 ) -> HashMap<StageId, StageInfo> {
-    let guard = stages.lock().await;
+    let guard = stages.lock().unwrap();
 
     let mut result = HashMap::new();
     for (stage_id, stage_state) in guard.iter() {
         if job_id.is_none() || stage_id.job_id == job_id.unwrap() {
-            let stage_info = StageInfo::from_stage_state(stage_state).await;
+            let stage_info = StageInfo::from_stage_state(stage_state);
             result.insert(*stage_id, stage_info);
         }
     }
@@ -209,7 +211,7 @@ pub async fn cleanup_job(
 
     for node_id in alive_nodes.keys() {
         if node_id == local_node {
-            let mut guard = local_stages.lock().await;
+            let mut guard = local_stages.lock().unwrap();
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
             drop(guard);
         } else {

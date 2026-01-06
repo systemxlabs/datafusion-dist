@@ -70,7 +70,7 @@ pub struct StageInfo {
 }
 
 impl StageInfo {
-    pub async fn from_stage_state(stage_state: &StageState) -> Self {
+    pub fn from_stage_state(stage_state: &StageState) -> Self {
         let task_set_infos = stage_state
             .task_sets
             .iter()

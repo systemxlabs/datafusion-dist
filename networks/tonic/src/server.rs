@@ -131,12 +131,11 @@ impl DistTonicService for DistTonicServer {
             Some(id) => {
                 let job_id = Uuid::parse_str(&id)
                     .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
-                self.runtime.get_local_job(job_id).await
+                self.runtime.get_local_job(job_id)
             }
             None => self
                 .runtime
                 .get_local_jobs()
-                .await
                 .into_values()
                 .flatten()
                 .collect(),
@@ -157,7 +156,7 @@ impl DistTonicService for DistTonicServer {
         let job_id = Uuid::parse_str(&request.into_inner().job_id)
             .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
 
-        self.runtime.cleanup_local_job(job_id).await;
+        self.runtime.cleanup_local_job(job_id);
 
         Ok(Response::new(CleanupJobResp {}))
     }
