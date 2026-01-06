@@ -202,3 +202,13 @@ impl Default for CpuRuntime {
         Self::new()
     }
 }
+
+pub fn logging_cpu_runtime_metrics(handle: &Handle) {
+    let metrics = handle.metrics();
+    debug!(
+        "cpu tokio runtime metrics num_workers: {}, num_alive_tasks: {}, global_queue_depth: {}",
+        metrics.num_workers(),
+        metrics.num_alive_tasks(),
+        metrics.global_queue_depth()
+    );
+}

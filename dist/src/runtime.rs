@@ -28,7 +28,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
-    util::{CpuRuntime, ReceiverStreamBuilder, timestamp_ms},
+    util::{CpuRuntime, ReceiverStreamBuilder, logging_cpu_runtime_metrics, timestamp_ms},
 };
 
 #[derive(Debug, Clone)]
@@ -225,6 +225,8 @@ impl DistRuntime {
         for handle in handles {
             handle.await??;
         }
+
+        logging_cpu_runtime_metrics(self.cpu_runtime.handle());
 
         Ok((job_id, stage0_task_distribution))
     }
