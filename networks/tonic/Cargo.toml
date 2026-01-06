@@ -23,5 +23,4 @@ futures = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
-tokio-stream = { workspace = true }
 uuid = { workspace = true }

@@ -23,6 +23,6 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 sysinfo = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "time", "mio"] }
+tokio = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 

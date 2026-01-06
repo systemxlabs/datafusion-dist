@@ -1453,7 +1453,6 @@ dependencies = [
  "futures",
  "prost 0.13.5",
  "tokio",
- "tokio-stream",
  "tonic 0.13.1",
  "uuid",
 ]
