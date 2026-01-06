@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::{
     arrow::{
-        array::{Int32Array, StringArray},
+        array::{Int32Array, Int64Array, StringArray},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
@@ -26,6 +26,7 @@ pub fn register_tables(ctx: &SessionContext) {
 
 pub fn register_udfs(ctx: &SessionContext) {
     register_panic_udf(ctx);
+    register_cpu_intensive_udf(ctx);
 }
 
 pub fn register_simple_table(ctx: &SessionContext) {
@@ -64,4 +65,55 @@ pub fn register_panic_udf(ctx: &SessionContext) {
 
 fn panic_udf_impl(_args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
     panic!("udf paniced");
+}
+
+/// Register a CPU-intensive UDF that simulates heavy computation
+/// Usage: SELECT cpu_intensive(iterations) FROM table
+/// The function computes fibonacci-like operations to burn CPU cycles
+pub fn register_cpu_intensive_udf(ctx: &SessionContext) {
+    let cpu_intensive_udf = create_udf(
+        "cpu_intensive",
+        vec![DataType::Int64],
+        DataType::Int64,
+        Volatility::Volatile,
+        Arc::new(cpu_intensive_udf_impl),
+    );
+    ctx.register_udf(cpu_intensive_udf);
+}
+
+fn cpu_intensive_udf_impl(args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
+    let arg0_arr = args[0].clone().into_array(1)?;
+    let arg0_arr = arg0_arr
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("Expected Int64Array");
+
+    let results: Vec<i64> = arg0_arr
+        .values()
+        .iter()
+        .map(|&n| {
+            // CPU-intensive computation: iterative calculation
+            let mut a: i64 = 0;
+            let mut b: i64 = 1;
+            for _ in 0..n.abs() {
+                let temp = a.wrapping_add(b);
+                a = b;
+                b = temp;
+            }
+            a
+        })
+        .collect();
+
+    match &args[0] {
+        ColumnarValue::Scalar(_) => {
+            let arr = Int64Array::from(results);
+            Ok(ColumnarValue::Scalar(
+                datafusion::scalar::ScalarValue::Int64(Some(arr.value(0))),
+            ))
+        }
+        ColumnarValue::Array(_) => {
+            let arr = Int64Array::from(results);
+            Ok(ColumnarValue::Array(Arc::new(arr)))
+        }
+    }
 }
