@@ -49,6 +49,34 @@ pub async fn execute_flightsql_query(sql: &str) -> Result<Vec<RecordBatch>, Box<
     Ok(batches)
 }
 
+pub async fn healthy_check_all_nodes() -> Result<(), Box<dyn Error>> {
+    for port in [50061, 50071, 50081] {
+        let endpoint = Endpoint::from_shared(format!("http://localhost:{port}"))?;
+        let channel = endpoint.connect().await?;
+        let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+
+        // This sql will be executed on connected node
+        let flight_info = flight_sql_client
+            .execute("SELECT 1".to_string(), None)
+            .await?;
+        let mut batches = Vec::new();
+        for endpoint in flight_info.endpoint {
+            let ticket = endpoint
+                .ticket
+                .as_ref()
+                .expect("ticket is required")
+                .clone();
+            let stream = flight_sql_client.do_get(ticket).await?;
+            let result: Vec<RecordBatch> = stream.try_collect().await?;
+            batches.extend(result);
+        }
+        if batches.is_empty() {
+            return Err("Healthy check failed: no data returned".into());
+        }
+    }
+    Ok(())
+}
+
 pub async fn assert_planner(
     sql: &str,
     expected_plan: &str,
