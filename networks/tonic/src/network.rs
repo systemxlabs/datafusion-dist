@@ -123,10 +123,7 @@ impl DistNetwork for DistTonicNetwork {
         let flight_data_stream = response.into_inner();
 
         // Convert our protobuf::FlightData stream to arrow_flight::FlightData stream using From trait
-        let converted_stream = flight_data_stream.map(|result| {
-            result
-                .map_err(|e| FlightError::ExternalError(Box::new(e)))
-        });
+        let converted_stream = flight_data_stream.map(|result| result.map_err(FlightError::from));
 
         // Create FlightRecordBatchStream from the converted stream
         let flight_record_batch_stream =
@@ -135,7 +132,7 @@ impl DistNetwork for DistTonicNetwork {
         // Convert FlightRecordBatchStream to RecordBatchStream (Pin<Box<dyn Stream<...>>)
         let record_batch_stream = Box::pin(
             flight_record_batch_stream
-                .map(|result| result.map_err(|e| DistError::internal(format!("{e}")))),
+                .map(|result| result.map_err(|e| DistError::network(Box::new(e)))),
         );
 
         Ok(record_batch_stream)
