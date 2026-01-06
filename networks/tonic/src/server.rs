@@ -1,5 +1,8 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc};
 
+use arrow::ipc::writer::IpcWriteOptions;
+use arrow_flight::error::FlightError;
+use arrow_flight::{FlightData, encode::FlightDataEncoderBuilder};
 use datafusion::prelude::SessionContext;
 use datafusion_dist::{
     DistResult,
@@ -12,7 +15,7 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -22,10 +25,7 @@ use crate::{
         self, CleanupJobReq, CleanupJobResp, GetJobStatusReq, GetJobStatusResp, SendTasksReq,
         SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
     },
-    serde::{
-        parse_stage_id, parse_task_distribution, parse_task_id, serialize_record_batch_result,
-        serialize_stage_info,
-    },
+    serde::{parse_stage_id, parse_task_distribution, parse_task_id, serialize_stage_info},
 };
 
 pub struct DistTonicServer {
@@ -94,7 +94,7 @@ type BoxedDistStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 
 
 #[async_trait::async_trait]
 impl DistTonicService for DistTonicServer {
-    type ExecuteTaskStream = BoxedDistStream<protobuf::RecordBatch>;
+    type ExecuteTaskStream = BoxedDistStream<FlightData>;
 
     async fn send_tasks(
         &self,
@@ -115,11 +115,31 @@ impl DistTonicService for DistTonicServer {
         request: Request<protobuf::TaskId>,
     ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
         let task_id = parse_task_id(request.into_inner());
-        let stream = self.runtime.execute_local(task_id).await.map_err(|e| {
+        let record_batch_stream = self.runtime.execute_local(task_id).await.map_err(|e| {
             Status::internal(format!("Failed to execute local task {task_id}: {e}"))
         })?;
+
+        // Configure IPC write options with LZ4 compression
+        let write_options = IpcWriteOptions::default()
+            .try_with_compression(Some(arrow::ipc::CompressionType::LZ4_FRAME))
+            .map_err(|e| Status::internal(format!("Failed to configure IPC write options: {e}")))?;
+
+        // Create flight data encoder directly from the record batch stream
+        let flight_encoder = FlightDataEncoderBuilder::new()
+            .with_options(write_options)
+            .build(record_batch_stream.map_err(|e| FlightError::ExternalError(Box::new(e))));
+
+        // Map FlightData to our protobuf FlightData
+        let flight_data_stream =
+            flight_encoder.map(|flight_data_result| match flight_data_result {
+                Ok(flight_data) => Ok(flight_data),
+                Err(e) => Err(Status::internal(format!(
+                    "Failed to encode flight data: {e}"
+                ))),
+            });
+
         Ok(Response::new(
-            stream.map(serialize_record_batch_result).boxed(),
+            Box::pin(flight_data_stream) as Self::ExecuteTaskStream
         ))
     }
 

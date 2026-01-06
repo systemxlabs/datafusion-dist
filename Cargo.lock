@@ -1441,6 +1441,7 @@ name = "datafusion-dist-network-tonic"
 version = "0.1.0"
 dependencies = [
  "arrow 56.2.0",
+ "arrow-flight 56.2.0",
  "async-trait",
  "datafusion",
  "datafusion-common",
@@ -1451,6 +1452,8 @@ dependencies = [
  "datafusion-proto",
  "futures",
  "prost 0.13.5",
+ "tokio",
+ "tokio-stream",
  "tonic 0.13.1",
  "uuid",
 ]

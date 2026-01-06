@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package arrow_flight;
+
+/*
+* A batch of Arrow data as part of a stream of batches.
+*/
+message FlightData {}
+

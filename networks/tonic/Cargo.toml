@@ -12,6 +12,7 @@ datafusion-dist = { workspace = true }
 
 async-trait = { workspace = true }
 arrow = { workspace = true }
+arrow-flight = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -21,4 +22,6 @@ datafusion-proto = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tokio-stream = { workspace = true }
 uuid = { workspace = true }
