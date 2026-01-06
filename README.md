@@ -15,7 +15,8 @@ datafusion-dist enables distributed query execution for DataFusion, allowing you
 2. The cluster manages nodes and their states; the runtime sends heartbeats to the cluster periodically.
 3. The planner breaks down the physical plan into stages.
 4. The scheduler assigns stages to nodes based on cluster state.
-5. The network layer handles communication between nodes.
+5. The executor runs tasks.
+6. The network layer handles communication between nodes.
 
 ### Example
 
@@ -64,6 +65,7 @@ CoalesceBatchesExec: target_batch_size=8192
 - Pluggable network layer (Tonic/gRPC supported)
 - Extensible planner for custom stage planning
 - Extensible scheduler for custom task scheduling
+- Extensible executor for custom task execution
 
 ## Project Structure
 

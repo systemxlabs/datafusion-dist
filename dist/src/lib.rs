@@ -2,6 +2,7 @@ pub mod cluster;
 pub mod config;
 mod error;
 pub mod event;
+pub mod executor;
 pub mod heartbeat;
 pub mod network;
 pub mod physical_plan;

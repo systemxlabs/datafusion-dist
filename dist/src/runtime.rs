@@ -22,6 +22,7 @@ use crate::{
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
     event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
+    executor::{DefaultExecutor, DistExecutor, logging_executor_metrics},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{
@@ -29,7 +30,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     schedule::{DefaultScheduler, DisplayableTaskDistribution, DistSchedule},
-    util::{CpuRuntime, ReceiverStreamBuilder, logging_cpu_runtime_metrics, timestamp_ms},
+    util::{ReceiverStreamBuilder, timestamp_ms},
 };
 
 #[derive(Debug, Clone)]
@@ -42,10 +43,10 @@ pub struct DistRuntime {
     pub network: Arc<dyn DistNetwork>,
     pub planner: Arc<dyn DistPlanner>,
     pub scheduler: Arc<dyn DistSchedule>,
+    pub executor: Arc<dyn DistExecutor>,
     pub heartbeater: Arc<Heartbeater>,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
-    pub cpu_runtime: Arc<CpuRuntime>,
 }
 
 impl DistRuntime {
@@ -79,8 +80,6 @@ impl DistRuntime {
         };
         start_event_handler(event_handler);
 
-        let cpu_runtime = Arc::new(CpuRuntime::new());
-
         Self {
             node_id: network.local_node(),
             status,
@@ -90,10 +89,10 @@ impl DistRuntime {
             network,
             planner: Arc::new(DefaultPlanner),
             scheduler: Arc::new(DefaultScheduler::new()),
+            executor: Arc::new(DefaultExecutor::new()),
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
-            cpu_runtime,
         }
     }
 
@@ -103,6 +102,10 @@ impl DistRuntime {
 
     pub fn with_scheduler(self, scheduler: Arc<dyn DistSchedule>) -> Self {
         Self { scheduler, ..self }
+    }
+
+    pub fn with_executor(self, executor: Arc<dyn DistExecutor>) -> Self {
+        Self { executor, ..self }
     }
 
     pub async fn start(&self) {
@@ -227,7 +230,7 @@ impl DistRuntime {
             handle.await??;
         }
 
-        logging_cpu_runtime_metrics(self.cpu_runtime.handle());
+        logging_executor_metrics(self.executor.handle());
 
         Ok((job_id, stage0_task_distribution))
     }
@@ -250,11 +253,6 @@ impl DistRuntime {
         let driver_task = async move {
             let mut df_stream = plan.execute(partition, task_ctx)?;
 
-            // Calling `next()` to drive the plan in this task drives the
-            // execution from the cpu runtime the other thread pool
-            //
-            // NOTE any IO run by this plan (for example, reading from an
-            // `ObjectStore`) will be done on this new thread pool as well.
             while let Some(batch) = df_stream.next().await {
                 let batch = batch.map_err(DistError::from);
                 if tx.send(batch).await.is_err() {
@@ -265,7 +263,7 @@ impl DistRuntime {
             Ok(()) as DistResult<()>
         };
 
-        receiver_stream_builder.spawn_on(driver_task, self.cpu_runtime.handle());
+        receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
 
         let stream = receiver_stream_builder.build();
 
