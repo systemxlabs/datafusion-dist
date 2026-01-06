@@ -1375,6 +1375,7 @@ dependencies = [
  "itertools 0.14.0",
  "local-ip-address",
  "log",
+ "parking_lot",
  "serde",
  "sysinfo",
  "tokio",

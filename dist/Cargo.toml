@@ -20,6 +20,7 @@ futures = { workspace = true }
 itertools = { workspace = true }
 local-ip-address = { workspace = true }
 log = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }

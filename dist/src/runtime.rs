@@ -1,10 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::Arc,
     task::{Context, Poll},
 };
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -111,7 +112,7 @@ impl DistRuntime {
 
     pub async fn shutdown(&self) {
         // Set status to Terminating
-        *self.status.lock().unwrap() = NodeStatus::Terminating;
+        *self.status.lock() = NodeStatus::Terminating;
         debug!("Set node status to Terminating, no new tasks will be assigned");
 
         self.heartbeater.send_heartbeat().await;
@@ -234,7 +235,7 @@ impl DistRuntime {
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
         let stage_id = task_id.stage_id();
 
-        let mut guard = self.stages.lock().unwrap();
+        let mut guard = self.stages.lock();
         let stage_state = guard
             .get_mut(&stage_id)
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
@@ -315,7 +316,7 @@ impl DistRuntime {
         let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         {
-            let mut guard = self.stages.lock().unwrap();
+            let mut guard = self.stages.lock();
             guard.extend(stage_states);
             drop(guard);
         }
@@ -339,7 +340,7 @@ impl DistRuntime {
 
     pub fn cleanup_local_job(&self, job_id: Uuid) {
         debug!("Cleaning up local Job {job_id}");
-        let mut guard = self.stages.lock().unwrap();
+        let mut guard = self.stages.lock();
         guard.retain(|stage_id, _| stage_id.job_id != job_id);
     }
 
@@ -632,7 +633,7 @@ impl Drop for TaskStream {
         tokio::spawn(async move {
             let mut send_event = false;
             {
-                let mut guard = stages.lock().unwrap();
+                let mut guard = stages.lock();
                 if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
                     stage_state.complete_task(task_id, task_set_id, task_metrics);
                     if stage_state.stage_id.stage == 0
@@ -659,7 +660,7 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
         loop {
             tokio::time::sleep(config.job_ttl_check_interval).await;
 
-            let mut guard = stages.lock().unwrap();
+            let mut guard = stages.lock();
             let mut to_cleanup = Vec::new();
             for (stage_id, stage_state) in guard.iter() {
                 let age_ms = timestamp_ms() - stage_state.create_at_ms;

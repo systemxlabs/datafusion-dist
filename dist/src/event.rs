@@ -1,9 +1,7 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use log::{debug, error};
+use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
@@ -96,7 +94,7 @@ impl EventHandler {
 
             let mut timeout_stage0_id = None;
             {
-                let stages_guard = local_stages.lock().unwrap();
+                let stages_guard = local_stages.lock();
                 for stage_id in stage0_ids {
                     if let Some(stage) = stages_guard.get(&stage_id)
                         && stage.never_executed()
@@ -187,7 +185,7 @@ pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: Option<Uuid>,
 ) -> HashMap<StageId, StageInfo> {
-    let guard = stages.lock().unwrap();
+    let guard = stages.lock();
 
     let mut result = HashMap::new();
     for (stage_id, stage_state) in guard.iter() {
@@ -211,7 +209,7 @@ pub async fn cleanup_job(
 
     for node_id in alive_nodes.keys() {
         if node_id == local_node {
-            let mut guard = local_stages.lock().unwrap();
+            let mut guard = local_stages.lock();
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
             drop(guard);
         } else {
