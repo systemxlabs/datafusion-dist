@@ -22,5 +22,4 @@ datafusion-proto = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true }

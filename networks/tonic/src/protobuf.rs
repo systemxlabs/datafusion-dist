@@ -34,11 +34,6 @@ pub struct StagePlan {
     pub plan: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RecordBatch {
-    #[prost(bytes = "vec", tag = "1")]
-    pub data: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusReq {
     #[prost(string, optional, tag = "1")]
     pub job_id: ::core::option::Option<::prost::alloc::string::String>,

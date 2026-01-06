@@ -14,7 +14,7 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tonic::transport::{Channel, Endpoint};
 use uuid::Uuid;
 
@@ -120,20 +120,10 @@ impl DistNetwork for DistTonicNetwork {
             .map_err(|e| DistError::network(Box::new(e)))?;
 
         // Get the FlightData stream from the response
-        let flight_data_stream = response.into_inner();
-
-        // Convert our protobuf::FlightData stream to arrow_flight::FlightData stream using From trait
-        let converted_stream = flight_data_stream.map(|result| result.map_err(FlightError::from));
-
-        // Create FlightRecordBatchStream from the converted stream
-        let flight_record_batch_stream =
-            FlightRecordBatchStream::new_from_flight_data(converted_stream);
-
-        // Convert FlightRecordBatchStream to RecordBatchStream (Pin<Box<dyn Stream<...>>)
-        let record_batch_stream = Box::pin(
-            flight_record_batch_stream
-                .map(|result| result.map_err(|e| DistError::network(Box::new(e)))),
-        );
+        let flight_data_stream = response.into_inner().map_err(FlightError::from);
+        let record_batch_stream = FlightRecordBatchStream::new_from_flight_data(flight_data_stream)
+            .map_err(|e| DistError::network(Box::new(e)))
+            .boxed();
 
         Ok(record_batch_stream)
     }

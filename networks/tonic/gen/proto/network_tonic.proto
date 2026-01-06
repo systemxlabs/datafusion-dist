@@ -37,10 +37,6 @@ message StagePlan {
   bytes plan = 2;
 }
 
-message RecordBatch {
-  bytes data = 1;
-}
-
 message GetJobStatusReq {
   optional string job_id = 1;
 }

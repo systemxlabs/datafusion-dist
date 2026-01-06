@@ -130,17 +130,11 @@ impl DistTonicService for DistTonicServer {
             .build(record_batch_stream.map_err(|e| FlightError::ExternalError(Box::new(e))));
 
         // Map FlightData to our protobuf FlightData
-        let flight_data_stream =
-            flight_encoder.map(|flight_data_result| match flight_data_result {
-                Ok(flight_data) => Ok(flight_data),
-                Err(e) => Err(Status::internal(format!(
-                    "Failed to encode flight data: {e}"
-                ))),
-            });
+        let flight_data_stream = flight_encoder
+            .map_err(|e| Status::internal(format!("Failed to encode flight data: {e}")))
+            .boxed();
 
-        Ok(Response::new(
-            Box::pin(flight_data_stream) as Self::ExecuteTaskStream
-        ))
+        Ok(Response::new(flight_data_stream))
     }
 
     async fn get_job_status(

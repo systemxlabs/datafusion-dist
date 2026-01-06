@@ -14,14 +14,10 @@ fn main() -> Result<(), String> {
         .compile_protos(&[proto_path], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {e}"))?;
 
-    // Read generated files
-    let network_tonic_proto = out_dir.join("network_tonic.rs");
+    let prost = out_dir.join("network_tonic.rs");
     let target = Path::new("../src/protobuf.rs");
-
-    let network_tonic_content = std::fs::read_to_string(network_tonic_proto).unwrap();
-
-    println!("Writing protobuf code to {}", target.display());
-    std::fs::write(target, network_tonic_content).unwrap();
+    println!("Copying {} to {}", prost.display(), target.display(),);
+    std::fs::copy(prost, target).unwrap();
 
     Ok(())
 }
