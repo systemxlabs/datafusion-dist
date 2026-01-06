@@ -54,7 +54,7 @@ pub fn register_simple_table(ctx: &SessionContext) {
 pub fn register_panic_udf(ctx: &SessionContext) {
     let panic_udf = create_udf(
         "panic",
-        vec![DataType::Utf8],
+        vec![],
         DataType::Int32,
         Volatility::Volatile,
         Arc::new(panic_udf_impl),
@@ -63,5 +63,5 @@ pub fn register_panic_udf(ctx: &SessionContext) {
 }
 
 fn panic_udf_impl(_args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
-    panic!("panic_udf_impl");
+    panic!("udf paniced");
 }
