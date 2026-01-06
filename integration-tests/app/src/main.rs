@@ -123,7 +123,11 @@ fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
     else {
         return false;
     };
-    matches!(literal.value(), datafusion::scalar::ScalarValue::Int32(Some(1)) | datafusion::scalar::ScalarValue::Int64(Some(1)))
+    matches!(
+        literal.value(),
+        datafusion::scalar::ScalarValue::Int32(Some(1))
+            | datafusion::scalar::ScalarValue::Int64(Some(1))
+    )
 }
 
 struct TestFlightSqlService {
