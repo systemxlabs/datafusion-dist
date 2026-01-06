@@ -15,8 +15,10 @@ async fn panic_task() -> Result<(), Box<dyn std::error::Error>> {
     setup_containers().await;
 
     // Use panic UDF to trigger a panic during execution
-    let batches = execute_flightsql_query("SELECT panic()").await?;
-    assert!(batches.is_empty());
+    let err = execute_flightsql_query("SELECT panic()").await.unwrap_err();
+    let err_msg = err.to_string();
+    println!("err msg: {err_msg}");
+    assert!(err_msg.contains(r#"panicked with message \"udf panicked\""#));
 
     // Verify the service is still working after panic by querying simple table
     let batches = execute_flightsql_query("SELECT * FROM simple").await?;

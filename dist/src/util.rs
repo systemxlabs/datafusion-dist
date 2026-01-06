@@ -86,19 +86,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                     }
                     // This means a tokio task error, likely a panic
                     Err(e) => {
-                        if e.is_panic() {
-                            // resume on the main thread
-                            std::panic::resume_unwind(e.into_panic());
-                        } else {
-                            // This should only occur if the task is
-                            // cancelled, which would only occur if
-                            // the JoinSet were aborted, which in turn
-                            // would imply that the receiver has been
-                            // dropped and this code is not running
-                            return Some(Err(DistError::internal(format!(
-                                "Non Panic Task error: {e}"
-                            ))));
-                        }
+                        return Some(Err(DistError::internal(format!("Tokio join error: {e}"))));
                     }
                 }
             }

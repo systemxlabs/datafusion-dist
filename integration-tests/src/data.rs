@@ -64,7 +64,7 @@ pub fn register_panic_udf(ctx: &SessionContext) {
 }
 
 fn panic_udf_impl(_args: &[ColumnarValue]) -> DFResult<ColumnarValue> {
-    panic!("udf paniced");
+    panic!("udf panicked");
 }
 
 /// Register a CPU-intensive UDF that simulates heavy computation
