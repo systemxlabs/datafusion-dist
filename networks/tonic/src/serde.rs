@@ -2,19 +2,12 @@
 
 use std::collections::HashMap;
 
-use arrow::{
-    array::RecordBatch,
-    error::ArrowError,
-    ipc::{reader::StreamReader, writer::StreamWriter},
-};
 use datafusion_dist::{
-    DistError, DistResult,
     cluster::NodeId,
     network::{StageInfo, TaskSetInfo},
     planner::{StageId, TaskId},
     runtime::TaskMetrics,
 };
-use tonic::Status;
 use uuid::Uuid;
 
 use crate::protobuf;
@@ -169,44 +162,6 @@ pub fn serialize_task_metrics(task_metrics: TaskMetrics) -> protobuf::TaskMetric
         output_bytes: task_metrics.output_bytes as u64,
         completed: task_metrics.completed,
     }
-}
-
-// ============================================================================
-// Result<RecordBatch, Status> serialization/parsing
-// ============================================================================
-
-pub fn parse_record_batch_res(
-    proto_res: Result<protobuf::RecordBatch, Status>,
-) -> DistResult<RecordBatch> {
-    let proto_batch = proto_res.map_err(|e| DistError::network(Box::new(e)))?;
-    let reader = StreamReader::try_new(proto_batch.data.as_slice(), None)?;
-    let mut batches = reader.into_iter().collect::<Result<Vec<_>, ArrowError>>()?;
-    if batches.len() == 1 {
-        return Ok(batches.remove(0));
-    }
-    let first_batch = batches
-        .first()
-        .ok_or_else(|| DistError::internal("No batch found in stream reader"))?;
-    let batch = arrow::compute::concat_batches(first_batch.schema_ref(), &batches)?;
-    Ok(batch)
-}
-
-#[allow(clippy::result_large_err)]
-pub fn serialize_record_batch_result(
-    batch_res: DistResult<RecordBatch>,
-) -> Result<protobuf::RecordBatch, Status> {
-    let batch = batch_res.map_err(|e| Status::from_error(Box::new(e)))?;
-
-    let mut data = vec![];
-    let mut writer = StreamWriter::try_new(&mut data, batch.schema_ref())
-        .map_err(|e| Status::internal(format!("Failed to build stream writer: {e}")))?;
-    writer.write(&batch).map_err(|e| {
-        Status::internal(format!("Failed to write batch through stream writer: {e}"))
-    })?;
-    writer
-        .finish()
-        .map_err(|e| Status::internal(format!("Failed to finish stream writer: {e}")))?;
-    Ok(protobuf::RecordBatch { data })
 }
 
 // ============================================================================

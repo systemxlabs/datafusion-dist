@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use arrow_flight::decode::FlightRecordBatchStream;
+use arrow_flight::error::FlightError;
 use datafusion_dist::{
     DistError, DistResult, RecordBatchStream,
     cluster::NodeId,
@@ -12,7 +14,7 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use tonic::transport::{Channel, Endpoint};
 use uuid::Uuid;
 
@@ -20,8 +22,8 @@ use crate::{
     codec::DistPhysicalExtensionEncoder,
     protobuf::{self, SendTasksReq, StagePlan, dist_tonic_service_client::DistTonicServiceClient},
     serde::{
-        parse_record_batch_res, parse_stage_id, parse_stage_info, serialize_stage_id,
-        serialize_task_distribution, serialize_task_id,
+        parse_stage_id, parse_stage_info, serialize_stage_id, serialize_task_distribution,
+        serialize_task_id,
     },
 };
 
@@ -112,11 +114,18 @@ impl DistNetwork for DistTonicNetwork {
         task_id: TaskId,
     ) -> DistResult<RecordBatchStream> {
         let mut tonic_client = build_tonic_client(node_id).await?;
-        let stream = tonic_client
+        let response = tonic_client
             .execute_task(serialize_task_id(task_id))
             .await
             .map_err(|e| DistError::network(Box::new(e)))?;
-        Ok(stream.into_inner().map(parse_record_batch_res).boxed())
+
+        // Get the FlightData stream from the response
+        let flight_data_stream = response.into_inner().map_err(FlightError::from);
+        let record_batch_stream = FlightRecordBatchStream::new_from_flight_data(flight_data_stream)
+            .map_err(|e| DistError::network(Box::new(e)))
+            .boxed();
+
+        Ok(record_batch_stream)
     }
 
     async fn get_job_status(

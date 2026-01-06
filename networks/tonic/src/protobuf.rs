@@ -34,11 +34,6 @@ pub struct StagePlan {
     pub plan: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RecordBatch {
-    #[prost(bytes = "vec", tag = "1")]
-    pub data: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusReq {
     #[prost(string, optional, tag = "1")]
     pub job_id: ::core::option::Option<::prost::alloc::string::String>,
@@ -246,7 +241,7 @@ pub mod dist_tonic_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::TaskId>,
         ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::RecordBatch>>,
+            tonic::Response<tonic::codec::Streaming<::arrow_flight::FlightData>>,
             tonic::Status,
         > {
             self.inner.ready().await.map_err(|e| {
@@ -318,7 +313,7 @@ pub mod dist_tonic_service_server {
         ) -> std::result::Result<tonic::Response<super::SendTasksResp>, tonic::Status>;
         /// Server streaming response type for the ExecuteTask method.
         type ExecuteTaskStream: tonic::codegen::tokio_stream::Stream<
-                Item = std::result::Result<super::RecordBatch, tonic::Status>,
+                Item = std::result::Result<::arrow_flight::FlightData, tonic::Status>,
             > + std::marker::Send
             + 'static;
         async fn execute_task(
@@ -452,7 +447,7 @@ pub mod dist_tonic_service_server {
                     impl<T: DistTonicService> tonic::server::ServerStreamingService<super::TaskId>
                         for ExecuteTaskSvc<T>
                     {
-                        type Response = super::RecordBatch;
+                        type Response = ::arrow_flight::FlightData;
                         type ResponseStream = T::ExecuteTaskStream;
                         type Future =
                             BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
