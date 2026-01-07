@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
 use bb8::Pool;
 use bb8_postgres::PostgresConnectionManager;
@@ -11,6 +11,65 @@ use datafusion_dist::{
 use log::{debug, trace};
 
 use crate::PostgresClusterError;
+
+static DATAFUSION_DIST_CLUSTER_NODES_TABLE_NAME: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("DATAFUSION_DIST_CLUSTER_NODES_TABLE_NAME")
+        .unwrap_or_else(|_| "cluster_nodes".to_string())
+});
+
+static ENSURE_SCHEMA_QUERY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        r#"
+            CREATE TABLE IF NOT EXISTS {} (
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                total_memory BIGINT NOT NULL,
+                used_memory BIGINT NOT NULL,
+                free_memory BIGINT NOT NULL,
+                available_memory BIGINT NOT NULL,
+                global_cpu_usage FLOAT4 NOT NULL,
+                num_running_tasks INTEGER NOT NULL,
+                last_heartbeat BIGINT NOT NULL,
+                UNIQUE(host, port)
+            )
+        "#,
+        DATAFUSION_DIST_CLUSTER_NODES_TABLE_NAME.clone()
+    )
+});
+
+static HEARTBEAT_QUERY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        r#"
+            INSERT INTO {} (
+                host, port, status, total_memory, used_memory, free_memory,
+                available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (host, port)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                total_memory = EXCLUDED.total_memory,
+                used_memory = EXCLUDED.used_memory,
+                free_memory = EXCLUDED.free_memory,
+                available_memory = EXCLUDED.available_memory,
+                global_cpu_usage = EXCLUDED.global_cpu_usage,
+                num_running_tasks = EXCLUDED.num_running_tasks,
+                last_heartbeat = EXCLUDED.last_heartbeat
+        "#,
+        DATAFUSION_DIST_CLUSTER_NODES_TABLE_NAME.clone()
+    )
+});
+
+static ALIVE_NODES_QUERY: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        r#"SELECT host, port, status, total_memory, used_memory,
+            free_memory, available_memory, global_cpu_usage, num_running_tasks
+        FROM {}
+        WHERE last_heartbeat >= $1
+        "#,
+        DATAFUSION_DIST_CLUSTER_NODES_TABLE_NAME.clone()
+    )
+});
 
 #[derive(Debug, Clone)]
 pub struct PostgresCluster {
@@ -35,24 +94,7 @@ impl PostgresCluster {
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         client
-            .execute(
-                r#"
-                     CREATE TABLE IF NOT EXISTS cluster_nodes (
-                         host TEXT NOT NULL,
-                         port INTEGER NOT NULL,
-                         status TEXT NOT NULL,
-                         total_memory BIGINT NOT NULL,
-                         used_memory BIGINT NOT NULL,
-                         free_memory BIGINT NOT NULL,
-                         available_memory BIGINT NOT NULL,
-                         global_cpu_usage FLOAT4 NOT NULL,
-                         num_running_tasks INTEGER NOT NULL,
-                         last_heartbeat BIGINT NOT NULL,
-                         UNIQUE(host, port)
-                     )
-                     "#,
-                &[],
-            )
+            .execute(ENSURE_SCHEMA_QUERY.as_str(), &[])
             .await
             .map_err(|e| PostgresClusterError::Query(format!("Failed to create table: {e:?}")))?;
 
@@ -76,22 +118,7 @@ impl DistCluster for PostgresCluster {
 
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
-        let query = r#"
-                   INSERT INTO cluster_nodes (
-                       host, port, status, total_memory, used_memory, free_memory,
-                       available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
-                   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                   ON CONFLICT (host, port)
-                   DO UPDATE SET
-                       status = EXCLUDED.status,
-                       total_memory = EXCLUDED.total_memory,
-                       used_memory = EXCLUDED.used_memory,
-                       free_memory = EXCLUDED.free_memory,
-                       available_memory = EXCLUDED.available_memory,
-                       global_cpu_usage = EXCLUDED.global_cpu_usage,
-                       num_running_tasks = EXCLUDED.num_running_tasks,
-                       last_heartbeat = EXCLUDED.last_heartbeat
-                   "#;
+        let query = HEARTBEAT_QUERY.as_str();
 
         client
             .execute(
@@ -127,17 +154,11 @@ impl DistCluster for PostgresCluster {
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         let rows = client
-                        .query(
-                            r#"
-                            SELECT host, port, status, total_memory, used_memory,
-                                   free_memory, available_memory, global_cpu_usage, num_running_tasks
-                            FROM cluster_nodes
-                            WHERE last_heartbeat >= $1
-                            "#,
-                            &[&cutoff_time],
-                        )
-                        .await
-                        .map_err(|e| PostgresClusterError::Query(format!("Failed to query alive nodes: {}", e)))?;
+            .query(ALIVE_NODES_QUERY.as_str(), &[&cutoff_time])
+            .await
+            .map_err(|e| {
+                PostgresClusterError::Query(format!("Failed to query alive nodes: {}", e))
+            })?;
 
         let mut result = HashMap::new();
         for row in rows {
