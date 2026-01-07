@@ -67,7 +67,7 @@ impl PostgresClusterBuilder {
             heartbeat_timeout_seconds: self.heartbeat_timeout_seconds,
         };
 
-        cluster.ensure_schema().await?;
+        cluster.create_table_if_not_exists().await?;
 
         Ok(cluster)
     }

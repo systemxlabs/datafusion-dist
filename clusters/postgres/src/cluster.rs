@@ -20,7 +20,7 @@ pub struct PostgresCluster {
 }
 
 impl PostgresCluster {
-    pub async fn ensure_schema(&self) -> DistResult<()> {
+    pub async fn create_table_if_not_exists(&self) -> DistResult<()> {
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         let create_table_sql = format!(
