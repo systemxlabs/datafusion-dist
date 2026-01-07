@@ -1390,6 +1390,7 @@ dependencies = [
  "bb8",
  "bb8-postgres",
  "datafusion-dist",
+ "derive-with",
  "futures",
  "log",
  "sysinfo",

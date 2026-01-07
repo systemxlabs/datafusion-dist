@@ -11,6 +11,7 @@ description = "A PostgreSQL cluster implementation for datafusion-dist"
 datafusion-dist.workspace = true
 
 async-trait.workspace = true
+derive-with.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
 uuid.workspace = true

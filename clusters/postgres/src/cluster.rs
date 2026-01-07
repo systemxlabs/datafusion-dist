@@ -14,45 +14,36 @@ use crate::PostgresClusterError;
 
 #[derive(Debug, Clone)]
 pub struct PostgresCluster {
-    pool: Pool<PostgresConnectionManager<NoTls>>,
-    heartbeat_timeout_seconds: i32,
+    pub(crate) table: String,
+    pub(crate) pool: Pool<PostgresConnectionManager<NoTls>>,
+    pub(crate) heartbeat_timeout_seconds: i32,
 }
 
 impl PostgresCluster {
-    pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
-        Self {
-            pool,
-            heartbeat_timeout_seconds: 60,
-        }
-    }
-
-    pub fn with_heartbeat_timeout(mut self, timeout_seconds: i32) -> Self {
-        self.heartbeat_timeout_seconds = timeout_seconds;
-        self
-    }
-
     pub async fn ensure_schema(&self) -> DistResult<()> {
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
+        let create_table_sql = format!(
+            r#"
+             CREATE TABLE IF NOT EXISTS {} (
+                 host TEXT NOT NULL,
+                 port INTEGER NOT NULL,
+                 status TEXT NOT NULL,
+                 total_memory BIGINT NOT NULL,
+                 used_memory BIGINT NOT NULL,
+                 free_memory BIGINT NOT NULL,
+                 available_memory BIGINT NOT NULL,
+                 global_cpu_usage FLOAT4 NOT NULL,
+                 num_running_tasks INTEGER NOT NULL,
+                 last_heartbeat BIGINT NOT NULL,
+                 UNIQUE(host, port)
+             )
+             "#,
+            self.table
+        );
+
         client
-            .execute(
-                r#"
-                     CREATE TABLE IF NOT EXISTS cluster_nodes (
-                         host TEXT NOT NULL,
-                         port INTEGER NOT NULL,
-                         status TEXT NOT NULL,
-                         total_memory BIGINT NOT NULL,
-                         used_memory BIGINT NOT NULL,
-                         free_memory BIGINT NOT NULL,
-                         available_memory BIGINT NOT NULL,
-                         global_cpu_usage FLOAT4 NOT NULL,
-                         num_running_tasks INTEGER NOT NULL,
-                         last_heartbeat BIGINT NOT NULL,
-                         UNIQUE(host, port)
-                     )
-                     "#,
-                &[],
-            )
+            .execute(&create_table_sql, &[])
             .await
             .map_err(|e| PostgresClusterError::Query(format!("Failed to create table: {e:?}")))?;
 
@@ -76,8 +67,9 @@ impl DistCluster for PostgresCluster {
 
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
-        let query = r#"
-                   INSERT INTO cluster_nodes (
+        let query = format!(
+            r#"
+                   INSERT INTO {} (
                        host, port, status, total_memory, used_memory, free_memory,
                        available_memory, global_cpu_usage, num_running_tasks, last_heartbeat
                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -91,11 +83,13 @@ impl DistCluster for PostgresCluster {
                        global_cpu_usage = EXCLUDED.global_cpu_usage,
                        num_running_tasks = EXCLUDED.num_running_tasks,
                        last_heartbeat = EXCLUDED.last_heartbeat
-                   "#;
+                   "#,
+            self.table
+        );
 
         client
             .execute(
-                query,
+                &query,
                 &[
                     &node_id.host,
                     &(node_id.port as i32),
@@ -126,18 +120,15 @@ impl DistCluster for PostgresCluster {
 
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
-        let rows = client
-                        .query(
-                            r#"
-                            SELECT host, port, status, total_memory, used_memory,
-                                   free_memory, available_memory, global_cpu_usage, num_running_tasks
-                            FROM cluster_nodes
-                            WHERE last_heartbeat >= $1
-                            "#,
-                            &[&cutoff_time],
-                        )
-                        .await
-                        .map_err(|e| PostgresClusterError::Query(format!("Failed to query alive nodes: {}", e)))?;
+        let query = format!(
+            r#"SELECT host, port, status, total_memory, used_memory, free_memory, available_memory, global_cpu_usage, num_running_tasks
+                FROM {} WHERE last_heartbeat >= $1"#,
+            self.table
+        );
+
+        let rows = client.query(&query, &[&cutoff_time]).await.map_err(|e| {
+            PostgresClusterError::Query(format!("Failed to query alive nodes: {}", e))
+        })?;
 
         let mut result = HashMap::new();
         for row in rows {

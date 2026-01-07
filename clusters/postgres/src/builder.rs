@@ -7,15 +7,18 @@ use datafusion_dist::DistError;
 
 use crate::{PostgresCluster, PostgresClusterError};
 
+#[derive(Debug, derive_with::With)]
 pub struct PostgresClusterBuilder {
     host: String,
     port: u16,
     user: String,
     password: String,
     dbname: Option<String>,
+    table: String,
     pool_max_size: u32,
     pool_min_idle: Option<u32>,
     pool_idle_timeout: Option<Duration>,
+    heartbeat_timeout_seconds: i32,
 }
 
 impl PostgresClusterBuilder {
@@ -31,30 +34,12 @@ impl PostgresClusterBuilder {
             user: user.into(),
             password: password.into(),
             dbname: None,
+            table: "cluster_nodes".to_string(),
             pool_max_size: 100,
             pool_min_idle: Some(5),
             pool_idle_timeout: Some(Duration::from_secs(60)),
+            heartbeat_timeout_seconds: 60,
         }
-    }
-
-    pub fn dbname(mut self, dbname: impl Into<String>) -> Self {
-        self.dbname = Some(dbname.into());
-        self
-    }
-
-    pub fn pool_max_size(mut self, pool_max_size: u32) -> Self {
-        self.pool_max_size = pool_max_size;
-        self
-    }
-
-    pub fn pool_min_idle(mut self, pool_min_idle: Option<u32>) -> Self {
-        self.pool_min_idle = pool_min_idle;
-        self
-    }
-
-    pub fn pool_idle_timeout(mut self, pool_idle_timeout: Option<Duration>) -> Self {
-        self.pool_idle_timeout = pool_idle_timeout;
-        self
     }
 
     pub async fn build(self) -> Result<PostgresCluster, DistError> {
@@ -76,7 +61,11 @@ impl PostgresClusterBuilder {
             .await
             .map_err(|e| DistError::cluster(Box::new(PostgresClusterError::Connection(e))))?;
 
-        let cluster = PostgresCluster::new(pool);
+        let cluster = PostgresCluster {
+            table: self.table,
+            pool,
+            heartbeat_timeout_seconds: self.heartbeat_timeout_seconds,
+        };
 
         cluster.ensure_schema().await?;
 
