@@ -337,9 +337,23 @@ impl DistRuntime {
     }
 
     pub fn cleanup_local_job(&self, job_id: Uuid) {
-        debug!("Cleaning up local Job {job_id}");
         let mut guard = self.stages.lock();
-        guard.retain(|stage_id, _| stage_id.job_id != job_id);
+        let stage_ids = guard
+            .iter()
+            .filter(|(stage_id, _)| stage_id.job_id == job_id)
+            .map(|(stage_id, _)| stage_id)
+            .collect::<Vec<_>>();
+        if !stage_ids.is_empty() {
+            debug!(
+                "Cleaning up local Job {job_id} stages [{}]",
+                stage_ids
+                    .iter()
+                    .map(|id| id.stage.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            guard.retain(|stage_id, _| stage_id.job_id != job_id);
+        }
     }
 
     pub async fn cleanup_job(&self, job_id: Uuid) -> DistResult<()> {
