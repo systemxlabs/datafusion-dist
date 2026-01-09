@@ -8,6 +8,7 @@ use datafusion_physical_plan::{
     stream::RecordBatchStreamAdapter,
 };
 use futures::{StreamExt, TryStreamExt};
+use itertools::Itertools;
 
 use crate::{
     DistError, DistResult,
@@ -118,11 +119,26 @@ impl ExecutionPlan for ProxyExec {
 
 impl DisplayAs for ProxyExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let task_distribution_display = self
+        let node_tasks = self
             .delegated_task_distribution
             .iter()
-            .map(|(task_id, node_id)| format!("{}->{}", task_id.partition, node_id))
-            .collect::<Vec<String>>()
+            .into_group_map_by(|(_, node_id)| *node_id);
+
+        let task_distribution_display = node_tasks
+            .iter()
+            .map(|(node_id, tasks)| {
+                format!(
+                    "{{{}}}->{node_id}",
+                    tasks
+                        .iter()
+                        .map(|(task_id, _)| task_id.partition)
+                        .sorted()
+                        .map(|partition| partition.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            })
+            .collect::<Vec<_>>()
             .join(", ");
         write!(
             f,
