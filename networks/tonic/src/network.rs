@@ -98,7 +98,7 @@ impl DistNetwork for DistTonicNetwork {
     fn local_node(&self) -> NodeId {
         static LOCAL_IP: OnceLock<String> = OnceLock::new();
         NodeId {
-            host: LOCAL_IP.get_or_init(|| get_local_ip()).clone(),
+            host: LOCAL_IP.get_or_init(get_local_ip).clone(),
             port: self.port,
         }
     }
