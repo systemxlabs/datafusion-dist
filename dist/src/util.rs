@@ -16,6 +16,7 @@ pub fn timestamp_ms() -> i64 {
         .as_millis() as i64
 }
 
+// This function will spawn thread to get the local IP address, so don't call it frequently
 pub fn get_local_ip() -> String {
     local_ip_address::local_ip()
         .expect("Failed to get local IP")

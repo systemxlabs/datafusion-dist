@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
@@ -92,8 +96,9 @@ impl DistTonicNetwork {
 #[async_trait::async_trait]
 impl DistNetwork for DistTonicNetwork {
     fn local_node(&self) -> NodeId {
+        static LOCAL_IP: OnceLock<String> = OnceLock::new();
         NodeId {
-            host: get_local_ip(),
+            host: LOCAL_IP.get_or_init(|| get_local_ip()).clone(),
             port: self.port,
         }
     }
