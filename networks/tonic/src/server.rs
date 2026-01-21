@@ -3,13 +3,13 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow_flight::error::FlightError;
 use arrow_flight::{FlightData, encode::FlightDataEncoderBuilder};
-use datafusion::prelude::SessionContext;
 use datafusion_dist::{
     DistResult,
     network::{ScheduledTasks, StageInfo},
     planner::StageId,
     runtime::DistRuntime,
 };
+use datafusion_execution::TaskContext;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
@@ -30,28 +30,27 @@ use crate::{
 
 pub struct DistTonicServer {
     pub runtime: DistRuntime,
-    pub ctx: SessionContext,
+    pub task_ctx: Arc<TaskContext>,
     pub composed_extension_codec: Arc<dyn PhysicalExtensionCodec>,
 }
 
 impl DistTonicServer {
     pub fn new(
         runtime: DistRuntime,
-        ctx: SessionContext,
+        task_ctx: Arc<TaskContext>,
         app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
     ) -> Self {
         let composed_extension_codec = Arc::new(ComposedPhysicalExtensionCodec::new(vec![
             app_extension_codec.clone(),
             Arc::new(DistPhysicalExtensionDecoder {
                 runtime: runtime.clone(),
-                ctx: ctx.clone(),
                 app_extension_codec,
             }),
         ]));
 
         Self {
             runtime,
-            ctx,
+            task_ctx,
             composed_extension_codec,
         }
     }
@@ -78,13 +77,9 @@ impl DistTonicServer {
 
     fn parse_stage_plan(&self, proto: StagePlan) -> DistResult<(StageId, Arc<dyn ExecutionPlan>)> {
         let stage_id = parse_stage_id(proto.stage_id.expect("stage_id should not be null"));
-        let task_ctx = self.ctx.task_ctx();
         let plan: Arc<dyn ExecutionPlan> =
             PhysicalPlanNode::try_decode(&proto.plan).and_then(|proto| {
-                proto.try_into_physical_plan(
-                    &task_ctx,
-                    self.composed_extension_codec.as_ref(),
-                )
+                proto.try_into_physical_plan(&self.task_ctx, self.composed_extension_codec.as_ref())
             })?;
         Ok((stage_id, plan))
     }

@@ -1,10 +1,9 @@
 use std::{fmt::Debug, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use datafusion::prelude::SessionContext;
 use datafusion_common::DataFusionError;
 use datafusion_dist::{physical_plan::ProxyExec, runtime::DistRuntime};
-use datafusion::execution::TaskContext;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::{
     ExecutionPlan, PlanProperties,
@@ -82,7 +81,6 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
 
 pub struct DistPhysicalExtensionDecoder {
     pub runtime: DistRuntime,
-    pub ctx: SessionContext,
     pub app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
 }
 
