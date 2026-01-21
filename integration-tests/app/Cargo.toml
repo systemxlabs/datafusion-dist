@@ -14,13 +14,14 @@ datafusion-dist-network-tonic = { workspace = true }
 datafusion-dist-integration-tests = { workspace = true }
 
 arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
+async-trait = { workspace = true }
 env_logger = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"]}
 tonic = { workspace = true }
 uuid = { workspace = true }
-async-trait = { workspace = true }

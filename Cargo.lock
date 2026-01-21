@@ -1211,6 +1211,7 @@ dependencies = [
  "futures",
  "log",
  "prost",
+ "serde_json",
  "tokio",
  "tonic",
  "uuid",

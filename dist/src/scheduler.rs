@@ -9,7 +9,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_plan::{
     ExecutionPlan, ExecutionPlanProperties,
     coalesce_partitions::CoalescePartitionsExec,
-    joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
+    joins::{HashJoinExec, NestedLoopJoinExec},
     repartition::RepartitionExec,
 };
 use itertools::Itertools;
@@ -194,8 +194,8 @@ pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
         {
             fully_pipelined = false;
         }
-        if let Some(hash_join) = any.downcast_ref::<HashJoinExec>()
-            && hash_join.partition_mode() == &PartitionMode::CollectLeft
+        if let Some(_hash_join) = any.downcast_ref::<HashJoinExec>()
+        // && hash_join.partition_mode() == &PartitionMode::CollectLeft
         {
             fully_pipelined = false;
         }
