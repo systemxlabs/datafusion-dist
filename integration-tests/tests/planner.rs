@@ -102,18 +102,17 @@ CoalesceBatchesExec: target_batch_size=8192
 #[tokio::test]
 async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = build_session_context();
-    {
-        let state = ctx.state_ref();
-        let mut state = state.write();
-        state.config_mut().options_mut().set(
-            "datafusion.optimizer.hash_join_single_partition_threshold",
-            "0",
-        )?;
-        state.config_mut().options_mut().set(
-            "datafusion.optimizer.hash_join_single_partition_threshold_rows",
-            "0",
-        )?;
-    }
+    let state = ctx.state_ref();
+    let mut state = state.write();
+    state.config_mut().options_mut().set(
+        "datafusion.optimizer.hash_join_single_partition_threshold",
+        "0",
+    )?;
+    state.config_mut().options_mut().set(
+        "datafusion.optimizer.hash_join_single_partition_threshold_rows",
+        "0",
+    )?;
+    drop(state);
 
     let plan = ctx
         .sql("select * from simple as t1 join simple as t2 on t1.name = t2.name")
