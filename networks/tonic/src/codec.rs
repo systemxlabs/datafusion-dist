@@ -35,7 +35,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &TaskContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         Err(DataFusionError::NotImplemented(
             "DistPhysicalExtensionEncoder::try_decode is not implemented".to_string(),
@@ -98,7 +98,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &TaskContext,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let dist_node = DistPhysicalPlanNode::decode(buf).map_err(|e| {
             DataFusionError::Internal(format!("Failed to decode dist physical plan node: {e:?}"))
@@ -125,7 +125,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                 let delegated_plan_schema: SchemaRef = Arc::new(convert_required!(proto.schema)?);
                 let partitioning = parse_protobuf_partitioning(
                     proto.partitioning.as_ref(),
-                    registry,
+                    ctx,
                     &delegated_plan_schema,
                     self.app_extension_codec.as_ref(),
                 )?
