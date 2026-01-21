@@ -78,11 +78,11 @@ impl DistTonicServer {
 
     fn parse_stage_plan(&self, proto: StagePlan) -> DistResult<(StageId, Arc<dyn ExecutionPlan>)> {
         let stage_id = parse_stage_id(proto.stage_id.expect("stage_id should not be null"));
+        let task_ctx = self.ctx.task_ctx();
         let plan: Arc<dyn ExecutionPlan> =
             PhysicalPlanNode::try_decode(&proto.plan).and_then(|proto| {
                 proto.try_into_physical_plan(
-                    &self.ctx,
-                    &self.ctx.runtime_env(),
+                    &task_ctx,
                     self.composed_extension_codec.as_ref(),
                 )
             })?;

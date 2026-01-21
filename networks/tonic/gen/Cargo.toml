@@ -9,4 +9,4 @@ description = "Code generation for proto"
 publish = false
 
 [dependencies]
-tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }

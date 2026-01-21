@@ -227,7 +227,7 @@ pub mod dist_tonic_service_client {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path =
                 http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/SendTasks");
             let mut req = request.into_request();
@@ -247,7 +247,7 @@ pub mod dist_tonic_service_client {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path =
                 http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/ExecuteTask");
             let mut req = request.into_request();
@@ -264,7 +264,7 @@ pub mod dist_tonic_service_client {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/network_tonic.DistTonicService/GetJobStatus",
             );
@@ -282,7 +282,7 @@ pub mod dist_tonic_service_client {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path =
                 http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/CleanupJob");
             let mut req = request.into_request();
@@ -426,7 +426,7 @@ pub mod dist_tonic_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SendTasksSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -466,7 +466,7 @@ pub mod dist_tonic_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ExecuteTaskSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -507,7 +507,7 @@ pub mod dist_tonic_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetJobStatusSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -546,7 +546,7 @@ pub mod dist_tonic_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CleanupJobSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
