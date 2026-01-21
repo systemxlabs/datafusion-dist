@@ -8,16 +8,16 @@ pub struct SendTasksReq {
     #[prost(message, optional, tag = "3")]
     pub job_task_distribution: ::core::option::Option<TaskDistribution>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SendTasksResp {}
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StageId {
     #[prost(string, tag = "1")]
     pub job_id: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub stage: u32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TaskId {
     #[prost(string, tag = "1")]
     pub job_id: ::prost::alloc::string::String,
@@ -26,14 +26,14 @@ pub struct TaskId {
     #[prost(uint32, tag = "3")]
     pub partition: u32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StagePlan {
     #[prost(message, optional, tag = "1")]
     pub stage_id: ::core::option::Option<StageId>,
     #[prost(bytes = "vec", tag = "2")]
     pub plan: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetJobStatusReq {
     #[prost(string, optional, tag = "1")]
     pub job_id: ::core::option::Option<::prost::alloc::string::String>,
@@ -61,14 +61,14 @@ pub struct TaskSetInfo {
     #[prost(message, repeated, tag = "2")]
     pub dropped_partitions: ::prost::alloc::vec::Vec<DroppedPartition>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DroppedPartition {
     #[prost(uint32, tag = "1")]
     pub partition: u32,
     #[prost(message, optional, tag = "2")]
     pub metrics: ::core::option::Option<TaskMetrics>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TaskMetrics {
     #[prost(uint64, tag = "1")]
     pub output_bytes: u64,
@@ -77,12 +77,12 @@ pub struct TaskMetrics {
     #[prost(bool, tag = "3")]
     pub completed: bool,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CleanupJobReq {
     #[prost(string, tag = "1")]
     pub job_id: ::prost::alloc::string::String,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CleanupJobResp {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistPhysicalPlanNode {
@@ -116,14 +116,14 @@ pub struct TaskDistribution {
     #[prost(message, repeated, tag = "1")]
     pub distribution: ::prost::alloc::vec::Vec<TaskNode>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TaskNode {
     #[prost(message, optional, tag = "1")]
     pub task_id: ::core::option::Option<TaskId>,
     #[prost(message, optional, tag = "2")]
     pub node_id: ::core::option::Option<NodeId>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NodeId {
     #[prost(string, tag = "1")]
     pub host: ::prost::alloc::string::String,
