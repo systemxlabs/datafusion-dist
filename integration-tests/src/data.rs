@@ -13,9 +13,10 @@ use datafusion::{
 };
 
 pub fn build_session_context() -> SessionContext {
-    let config = SessionConfig::new()
-        .with_target_partitions(12)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", false);
+    let config = SessionConfig::new().with_target_partitions(12).set_bool(
+        "datafusion.optimizer.enable_join_dynamic_filter_pushdown",
+        false,
+    );
     let ctx = SessionContext::new_with_config(config);
     register_tables(&ctx);
     register_udfs(&ctx);

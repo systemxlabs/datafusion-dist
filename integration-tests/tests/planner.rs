@@ -145,38 +145,24 @@ async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
         r#"===============Stage 0 (partitions=12)===============
 CoalesceBatchesExec: target_batch_size=8192
   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-        DataSourceExec: partitions=2, partition_sizes=[1, 1]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-        DataSourceExec: partitions=2, partition_sizes=[1, 1]
-"#
+    UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=2
+    UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=1
+===============Stage 1 (partitions=12)===============
+CoalesceBatchesExec: target_batch_size=8192
+  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+===============Stage 2 (partitions=12)===============
+CoalesceBatchesExec: target_batch_size=8192
+  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
     );
-    //     assert_eq!(
-    //         actual,
-    //         r#"===============Stage 0 (partitions=12)===============
-    // CoalesceBatchesExec: target_batch_size=8192
-    //   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
-    //     UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=2
-    //     UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=1
-    // ===============Stage 1 (partitions=12)===============
-    // CoalesceBatchesExec: target_batch_size=8192
-    //   RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-    //     DataSourceExec: partitions=2, partition_sizes=[1, 1]
-    // ===============Stage 2 (partitions=12)===============
-    // CoalesceBatchesExec: target_batch_size=8192
-    //   RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-    //     DataSourceExec: partitions=2, partition_sizes=[1, 1]
-    // "#,
-    //     );
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
-    // assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
-    // assert_stage_distributed_into_one_node(1, &distribution);
-    // assert_stage_distributed_into_one_node(2, &distribution);
+    assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
+    assert_stage_distributed_into_one_node(1, &distribution);
+    assert_stage_distributed_into_one_node(2, &distribution);
     Ok(())
 }
 
