@@ -1,10 +1,9 @@
 use std::{fmt::Debug, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use datafusion::prelude::SessionContext;
 use datafusion_common::DataFusionError;
 use datafusion_dist::{physical_plan::ProxyExec, runtime::DistRuntime};
-use datafusion_expr::registry::FunctionRegistry;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::{
     ExecutionPlan, PlanProperties,
@@ -36,7 +35,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         Err(DataFusionError::NotImplemented(
             "DistPhysicalExtensionEncoder::try_decode is not implemented".to_string(),
@@ -82,7 +81,6 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
 
 pub struct DistPhysicalExtensionDecoder {
     pub runtime: DistRuntime,
-    pub ctx: SessionContext,
     pub app_extension_codec: Arc<dyn PhysicalExtensionCodec>,
 }
 
@@ -100,7 +98,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let dist_node = DistPhysicalPlanNode::decode(buf).map_err(|e| {
             DataFusionError::Internal(format!("Failed to decode dist physical plan node: {e:?}"))
@@ -127,7 +125,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                 let delegated_plan_schema: SchemaRef = Arc::new(convert_required!(proto.schema)?);
                 let partitioning = parse_protobuf_partitioning(
                     proto.partitioning.as_ref(),
-                    &self.ctx,
+                    ctx,
                     &delegated_plan_schema,
                     self.app_extension_codec.as_ref(),
                 )?

@@ -20,13 +20,6 @@ select * from simple as t1 join simple as t2 on t1.age > t2.age
 ----
 Bob 30 Alice 25
 
-# Hash join (collect left)
-query TITI rowsort
-select * from simple as t1 join simple as t2 on t1.name = t2.name
-----
-Alice 25 Alice 25
-Bob 30 Bob 30
-
 # Change hash join settings to make hash join partitioned
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold = 0;
@@ -47,6 +40,13 @@ set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
 
 statement ok
 set datafusion.optimizer.hash_join_single_partition_threshold_rows = 131072;
+
+# Hash join (collect left)
+query TITI rowsort
+select * from simple as t1 join simple as t2 on t1.name = t2.name
+----
+Alice 25 Alice 25
+Bob 30 Bob 30
 
 # Union aggregate
 query TI rowsort

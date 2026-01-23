@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let dist_tonic_service =
-        DistTonicServer::new(runtime.clone(), ctx.clone(), app_extension_codec.clone());
+        DistTonicServer::new(runtime.clone(), ctx.task_ctx(), app_extension_codec.clone());
     let dist_tonic_server = Server::builder()
         .add_service(DistTonicServiceServer::new(dist_tonic_service))
         .serve("[::]:50050".parse()?);

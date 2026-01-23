@@ -1,14 +1,15 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
-        array::{RecordBatch, StringBuilder, UInt32Builder, UInt64Builder},
+        array::{RecordBatch, StringBuilder},
         datatypes::{DataType, Field, Schema, SchemaRef},
     },
     catalog::Session,
     common::Result as DFResult,
     datasource::{MemTable, TableProvider, TableType},
+    error::DataFusionError,
     physical_plan::ExecutionPlan,
     prelude::Expr,
 };
@@ -24,9 +25,7 @@ impl RunningJobsTable {
     pub fn new(runtime: DistRuntime) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("job_id", DataType::Utf8, false),
-            Field::new("stage", DataType::UInt32, false),
-            Field::new("num_running_tasks", DataType::UInt64, false),
-            Field::new("num_dropped_tasks", DataType::UInt64, false),
+            Field::new("stages", DataType::Utf8, false),
         ]));
         Self { runtime, schema }
     }
@@ -37,37 +36,26 @@ impl RunningJobsTable {
         })?;
 
         let mut job_id_builder = StringBuilder::new();
-        let mut stage_builder = UInt32Builder::new();
-        let mut num_running_tasks_builder = UInt64Builder::new();
-        let mut num_dropped_tasks_builder = UInt64Builder::new();
+        let mut stages_builder = StringBuilder::new();
 
         for (job_id, stages) in job_stats {
-            for (stage_id, stage_info) in stages {
-                let running: usize = stage_info
-                    .task_set_infos
-                    .iter()
-                    .map(|ts| ts.running_partitions.len())
-                    .sum();
-                let dropped: usize = stage_info
-                    .task_set_infos
-                    .iter()
-                    .map(|ts| ts.dropped_partitions.len())
-                    .sum();
+            job_id_builder.append_value(job_id.to_string());
 
-                job_id_builder.append_value(job_id.to_string());
-                stage_builder.append_value(stage_id.stage);
-                num_running_tasks_builder.append_value(running as u64);
-                num_dropped_tasks_builder.append_value(dropped as u64);
-            }
+            let stages = stages
+                .into_iter()
+                .map(|(stage_id, stage_info)| (stage_id.stage.to_string(), stage_info))
+                .collect::<HashMap<_, _>>();
+            let stages_json = serde_json::to_string(&stages).map_err(|e| {
+                DataFusionError::Execution(format!("Failed to serialize job stages: {e}"))
+            })?;
+            stages_builder.append_value(stages_json);
         }
 
         let batch = RecordBatch::try_new(
             self.schema.clone(),
             vec![
                 Arc::new(job_id_builder.finish()),
-                Arc::new(stage_builder.finish()),
-                Arc::new(num_running_tasks_builder.finish()),
-                Arc::new(num_dropped_tasks_builder.finish()),
+                Arc::new(stages_builder.finish()),
             ],
         )?;
 

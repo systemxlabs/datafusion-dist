@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use log::error;
+use log::{debug, error};
 use parking_lot::Mutex;
 
 use crate::{
@@ -42,12 +42,17 @@ impl Heartbeater {
             global_cpu_usage: sys.global_cpu_usage(),
             num_running_tasks: num_running_tasks as u32,
         };
-        if let Err(e) = self
+        match self
             .cluster
             .heartbeat(self.node_id.clone(), node_state)
             .await
         {
-            error!("Failed to send heartbeat: {e}");
+            Ok(_) => {
+                debug!("Heartbeat sent successfully");
+            }
+            Err(e) => {
+                error!("Failed to send heartbeat: {e:?}");
+            }
         }
     }
 
