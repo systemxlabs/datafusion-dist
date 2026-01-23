@@ -10,17 +10,17 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 homepage = "https://github.com/systemxlabs/datafusion-dist"
 license = "MIT"
 repository = "https://github.com/systemxlabs/datafusion-dist"
 
 [workspace.dependencies]
-datafusion-dist = { path = "dist", version = "0.2.0" }
-datafusion-dist-cluster-postgres = { path = "clusters/postgres", version = "0.2.0" }
-datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.2.0" }
-datafusion-dist-integration-tests = { path = "integration-tests", version = "0.2.0" }
+datafusion-dist = { path = "dist", version = "0.3.0" }
+datafusion-dist-cluster-postgres = { path = "clusters/postgres", version = "0.3.0" }
+datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.3.0" }
+datafusion-dist-integration-tests = { path = "integration-tests", version = "0.3.0" }
 
 arrow = "57"
 arrow-flight = "57"
