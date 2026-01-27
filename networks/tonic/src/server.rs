@@ -114,6 +114,8 @@ impl DistTonicService for DistTonicServer {
             Status::internal(format!("Failed to execute local task {task_id}: {e}"))
         })?;
 
+        let schema = record_batch_stream.schema();
+
         // Configure IPC write options with LZ4 compression
         let write_options = IpcWriteOptions::default()
             .try_with_compression(Some(arrow::ipc::CompressionType::LZ4_FRAME))
@@ -122,6 +124,7 @@ impl DistTonicService for DistTonicServer {
         // Create flight data encoder directly from the record batch stream
         let flight_encoder = FlightDataEncoderBuilder::new()
             .with_options(write_options)
+            .with_schema(schema)
             .build(record_batch_stream.map_err(|e| FlightError::ExternalError(Box::new(e))));
 
         // Map FlightData to our protobuf FlightData

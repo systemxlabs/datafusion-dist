@@ -4,12 +4,13 @@ use std::{
     sync::Arc,
 };
 
+use datafusion_execution::SendableRecordBatchStream;
 use datafusion_physical_plan::ExecutionPlan;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    DistError, DistResult, RecordBatchStream,
+    DistError, DistResult,
     cluster::NodeId,
     planner::{StageId, TaskId},
     runtime::{StageState, TaskMetrics, TaskSet},
@@ -19,12 +20,13 @@ use crate::{
 pub trait DistNetwork: Debug + Send + Sync {
     fn local_node(&self) -> NodeId;
 
-    // Send task plan
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()>;
 
-    // Execute task plan
-    async fn execute_task(&self, node_id: NodeId, task_id: TaskId)
-    -> DistResult<RecordBatchStream>;
+    async fn execute_task(
+        &self,
+        node_id: NodeId,
+        task_id: TaskId,
+    ) -> DistResult<SendableRecordBatchStream>;
 
     async fn get_job_status(
         &self,

@@ -11,11 +11,4 @@ pub mod runtime;
 pub mod scheduler;
 pub mod util;
 
-use std::pin::Pin;
-
 pub use error::{DistError, DistResult};
-
-use arrow::array::RecordBatch;
-use futures::Stream;
-
-pub type RecordBatchStream = Pin<Box<dyn Stream<Item = DistResult<RecordBatch>> + Send>>;
