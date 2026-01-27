@@ -231,6 +231,8 @@ impl FlightSqlService for TestFlightSqlService {
                 .map_err(|e| Status::from_error(Box::new(e)))?
         };
 
+        let schema = stream.schema();
+
         let stream = stream
             .map_err(|e| FlightError::ExternalError(Box::new(e)))
             .boxed();
@@ -238,6 +240,7 @@ impl FlightSqlService for TestFlightSqlService {
         let write_options = IpcWriteOptions::default();
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .with_options(write_options)
+            .with_schema(schema)
             .build(stream)
             .map_err(|err| Status::from_error(Box::new(err)));
         Ok(Response::new(
