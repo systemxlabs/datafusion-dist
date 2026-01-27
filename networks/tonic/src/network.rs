@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use arrow::datatypes::Schema;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use datafusion_common::DataFusionError;
@@ -126,21 +127,30 @@ impl DistNetwork for DistTonicNetwork {
             .await
             .map_err(|e| DistError::network(Box::new(e)))?;
 
-        let flight_stream = response.into_inner().map_err(FlightError::from);
-        let flight_stream = FlightRecordBatchStream::new_from_flight_data(flight_stream);
-        let schema = if let Some(schema) = flight_stream.schema() {
-            schema.clone()
-        } else {
-            return Err(DistError::internal(
-                "Flight data stream does not have schema",
-            ));
-        };
+        let mut flight_stream = response.into_inner();
+        match flight_stream.message().await {
+            Ok(res) => {
+                return match res {
+                    Some(flight_data) => {
+                        let schema = Arc::new(Schema::try_from(&flight_data)?);
 
-        let stream = flight_stream.map_err(|e| DataFusionError::Execution(e.to_string()));
-        let sendable_stream: SendableRecordBatchStream =
-            Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+                        let flight_stream = FlightRecordBatchStream::new_from_flight_data(
+                            flight_stream.map_err(FlightError::from),
+                        );
+                        let stream =
+                            flight_stream.map_err(|e| DataFusionError::Execution(e.to_string()));
+                        let sendable_stream: SendableRecordBatchStream =
+                            Box::pin(RecordBatchStreamAdapter::new(schema, stream));
 
-        Ok(sendable_stream)
+                        Ok(sendable_stream)
+                    }
+                    None => Err(DistError::internal(
+                        "Did not receive schema batch from flight server",
+                    )),
+                };
+            }
+            Err(e) => Err(DistError::network(Box::new(e))),
+        }
     }
 
     async fn get_job_status(
