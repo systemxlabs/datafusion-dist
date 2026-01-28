@@ -126,12 +126,12 @@ impl DistRuntime {
     pub async fn submit(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        meta: Arc<HashMap<String, String>>,
+        job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<(Uuid, HashMap<TaskId, NodeId>)> {
         let job_id = Uuid::new_v4();
         let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
         debug!(
-            "job {job_id} initial stage plans:\n{}",
+            "job {job_id}, job_meta {job_meta:?} initial stage plans:\n{}",
             DisplayableStagePlans(&stage_plans)
         );
         check_initial_stage_plans(job_id, &stage_plans)?;
@@ -209,7 +209,7 @@ impl DistRuntime {
                 node_stage_plans,
                 tasks,
                 Arc::new(task_distribution.clone()),
-                meta.clone(),
+                job_meta.clone(),
             );
 
             if node_id == self.node_id {
@@ -453,7 +453,7 @@ pub struct StageState {
     pub assigned_partitions: HashSet<usize>,
     pub task_sets: Vec<TaskSet>,
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
-    pub meta: Arc<HashMap<String, String>>,
+    pub job_meta: Arc<HashMap<String, String>>,
 }
 
 impl StageState {
@@ -484,7 +484,7 @@ impl StageState {
                     .collect(),
                 task_sets: Vec::new(),
                 job_task_distribution: scheduled_tasks.job_task_distribution.clone(),
-                meta: scheduled_tasks.meta.clone(),
+                job_meta: scheduled_tasks.job_meta.clone(),
             };
             stage_states.insert(stage_id, stage_state);
         }

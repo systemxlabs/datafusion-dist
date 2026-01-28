@@ -8,7 +8,7 @@ pub struct SendTasksReq {
     #[prost(message, optional, tag = "3")]
     pub job_task_distribution: ::core::option::Option<TaskDistribution>,
     #[prost(map = "string, string", tag = "4")]
-    pub meta:
+    pub job_meta:
         ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

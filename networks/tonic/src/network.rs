@@ -76,7 +76,7 @@ impl DistTonicNetwork {
             job_task_distribution: Some(serialize_task_distribution(
                 &scheduled_tasks.job_task_distribution,
             )),
-            meta: (*scheduled_tasks.meta).clone(),
+            job_meta: (*scheduled_tasks.job_meta).clone(),
         })
     }
 

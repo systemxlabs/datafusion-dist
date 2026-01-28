@@ -41,7 +41,7 @@ pub struct ScheduledTasks {
     pub stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
     pub task_ids: Vec<TaskId>,
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
-    pub meta: Arc<HashMap<String, String>>,
+    pub job_meta: Arc<HashMap<String, String>>,
 }
 
 impl ScheduledTasks {
@@ -49,13 +49,13 @@ impl ScheduledTasks {
         stage_plans: HashMap<StageId, Arc<dyn ExecutionPlan>>,
         task_ids: Vec<TaskId>,
         job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
-        meta: Arc<HashMap<String, String>>,
+        job_meta: Arc<HashMap<String, String>>,
     ) -> Self {
         ScheduledTasks {
             stage_plans,
             task_ids,
             job_task_distribution,
-            meta,
+            job_meta,
         }
     }
 
