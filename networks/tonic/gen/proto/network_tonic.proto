@@ -56,12 +56,7 @@ message StageInfo {
 
 message TaskSetInfo {
   repeated uint32 running_partitions = 1;
-  repeated DroppedPartition dropped_partitions = 2;
-}
-
-message DroppedPartition {
-  uint32 partition = 1;
-  TaskMetrics metrics = 2;
+  map<uint32, TaskMetrics> dropped_partitions = 2;
 }
 
 message TaskMetrics {

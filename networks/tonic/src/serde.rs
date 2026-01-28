@@ -109,13 +109,9 @@ pub fn serialize_stage_info(stage_id: StageId, stage_info: StageInfo) -> protobu
 
 pub fn parse_task_set_info(proto: protobuf::TaskSetInfo) -> TaskSetInfo {
     let mut dropped_partitions = HashMap::new();
-    for proto_dropped_partition in proto.dropped_partitions {
-        let partition = proto_dropped_partition.partition as usize;
-        let metrics = parse_task_metrics(
-            proto_dropped_partition
-                .metrics
-                .expect("task metrics is none"),
-        );
+    for (partition, metrics) in proto.dropped_partitions {
+        let partition = partition as usize;
+        let metrics = parse_task_metrics(metrics);
         dropped_partitions.insert(partition, metrics);
     }
     TaskSetInfo {
@@ -129,13 +125,10 @@ pub fn parse_task_set_info(proto: protobuf::TaskSetInfo) -> TaskSetInfo {
 }
 
 pub fn serialize_task_set_info(task_set_info: TaskSetInfo) -> protobuf::TaskSetInfo {
-    let mut dropped_partitions = Vec::new();
+    let mut dropped_partitions = HashMap::new();
     for (dropped_partition, task_metrics) in task_set_info.dropped_partitions {
         let serialized_metrics = serialize_task_metrics(task_metrics);
-        dropped_partitions.push(protobuf::DroppedPartition {
-            partition: dropped_partition as u32,
-            metrics: Some(serialized_metrics),
-        });
+        dropped_partitions.insert(dropped_partition as u32, serialized_metrics);
     }
     protobuf::TaskSetInfo {
         running_partitions: task_set_info
