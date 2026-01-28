@@ -64,15 +64,8 @@ pub struct StageInfo {
 pub struct TaskSetInfo {
     #[prost(uint32, repeated, tag = "1")]
     pub running_partitions: ::prost::alloc::vec::Vec<u32>,
-    #[prost(message, repeated, tag = "2")]
-    pub dropped_partitions: ::prost::alloc::vec::Vec<DroppedPartition>,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DroppedPartition {
-    #[prost(uint32, tag = "1")]
-    pub partition: u32,
-    #[prost(message, optional, tag = "2")]
-    pub metrics: ::core::option::Option<TaskMetrics>,
+    #[prost(map = "uint32, message", tag = "2")]
+    pub dropped_partitions: ::std::collections::HashMap<u32, TaskMetrics>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TaskMetrics {
