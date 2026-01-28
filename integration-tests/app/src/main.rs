@@ -269,9 +269,11 @@ impl FlightSqlService for TestFlightSqlService {
         );
         let schema = plan.schema();
 
+        let mut meta = HashMap::new();
+        meta.insert("query".to_string(), query.query.clone());
         let (_job_id, stage0_task_distribution) = self
             .runtime
-            .submit(plan)
+            .submit(plan, Arc::new(meta))
             .await
             .map_err(|e| Status::from_error(Box::new(e)))?;
         info!("Stage0 task distribution: {:?}", stage0_task_distribution);
