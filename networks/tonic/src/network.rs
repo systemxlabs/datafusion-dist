@@ -5,7 +5,7 @@ use std::{
 };
 
 use arrow::datatypes::Schema;
-use arrow_flight::{decode::FlightRecordBatchStream};
+use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use datafusion_common::DataFusionError;
 use datafusion_dist::{
@@ -138,15 +138,13 @@ impl DistNetwork for DistTonicNetwork {
             None => {
                 return Err(DistError::internal(
                     "Did not receive schema batch from flight server",
-                ))
+                ));
             }
         };
 
-        let flight_stream = FlightRecordBatchStream::new_from_flight_data(
-            flight_stream.map_err(FlightError::from),
-        );
-        let stream =
-            flight_stream.map_err(|e| DataFusionError::Execution(e.to_string()));
+        let flight_stream =
+            FlightRecordBatchStream::new_from_flight_data(flight_stream.map_err(FlightError::from));
+        let stream = flight_stream.map_err(|e| DataFusionError::Execution(e.to_string()));
         let sendable_stream: SendableRecordBatchStream =
             Box::pin(RecordBatchStreamAdapter::new(schema, stream));
 
