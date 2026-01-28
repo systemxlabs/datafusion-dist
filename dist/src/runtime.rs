@@ -13,7 +13,9 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_plan::{ExecutionPlan, stream::RecordBatchStreamAdapter};
+use datafusion_physical_plan::{
+    ExecutionPlan, display::DisplayableExecutionPlan, stream::RecordBatchStreamAdapter,
+};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
@@ -129,9 +131,14 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<(Uuid, HashMap<TaskId, NodeId>)> {
         let job_id = Uuid::new_v4();
+        debug!(
+            "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+
         let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
         debug!(
-            "job {job_id}, job_meta {job_meta:?} initial stage plans:\n{}",
+            "job {job_id} initial stage plans:\n{}",
             DisplayableStagePlans(&stage_plans)
         );
         check_initial_stage_plans(job_id, &stage_plans)?;

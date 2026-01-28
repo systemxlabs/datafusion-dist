@@ -51,6 +51,7 @@ message StageInfo {
   int64 created_at_ms = 2;
   repeated uint32 assigned_partitions = 3;
   repeated TaskSetInfo task_set_infos = 4;
+  map<string, string> job_meta = 5;
 }
 
 message TaskSetInfo {
