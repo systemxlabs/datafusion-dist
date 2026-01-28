@@ -68,10 +68,12 @@ impl DistTonicServer {
             req.job_task_distribution
                 .expect("job task distribution is none"),
         );
+        let job_meta = Arc::new(req.job_meta);
         Ok(ScheduledTasks::new(
             stage_plans,
             task_ids,
             Arc::new(job_task_distribution),
+            job_meta,
         ))
     }
 

@@ -17,6 +17,7 @@ message SendTasksReq {
   repeated StagePlan stage_plans = 1;
   repeated TaskId tasks = 2;
   TaskDistribution job_task_distribution = 3;
+  map<string, string> job_meta = 4;
 }
 
 message SendTasksResp {}
