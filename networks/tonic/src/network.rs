@@ -4,16 +4,19 @@ use std::{
     time::Duration,
 };
 
+use arrow::datatypes::Schema;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
+use datafusion_common::DataFusionError;
 use datafusion_dist::{
-    DistError, DistResult, RecordBatchStream,
+    DistError, DistResult,
     cluster::NodeId,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{StageId, TaskId},
     util::get_local_ip,
 };
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_execution::SendableRecordBatchStream;
+use datafusion_physical_plan::{ExecutionPlan, stream::RecordBatchStreamAdapter};
 use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
@@ -117,20 +120,35 @@ impl DistNetwork for DistTonicNetwork {
         &self,
         node_id: NodeId,
         task_id: TaskId,
-    ) -> DistResult<RecordBatchStream> {
+    ) -> DistResult<SendableRecordBatchStream> {
         let mut tonic_client = build_tonic_client(node_id).await?;
         let response = tonic_client
             .execute_task(serialize_task_id(task_id))
             .await
             .map_err(|e| DistError::network(Box::new(e)))?;
 
-        // Get the FlightData stream from the response
-        let flight_data_stream = response.into_inner().map_err(FlightError::from);
-        let record_batch_stream = FlightRecordBatchStream::new_from_flight_data(flight_data_stream)
-            .map_err(|e| DistError::network(Box::new(e)))
-            .boxed();
+        let flight_stream = response.into_inner();
+        let mut flight_stream = Box::pin(flight_stream.peekable());
 
-        Ok(record_batch_stream)
+        let schema = match flight_stream.as_mut().peek().await {
+            Some(Ok(flight_data)) => Arc::new(Schema::try_from(flight_data)?),
+            Some(Err(e)) => {
+                return Err(DistError::network(Box::new(e.clone())));
+            }
+            None => {
+                return Err(DistError::internal(
+                    "Did not receive schema batch from flight server",
+                ));
+            }
+        };
+
+        let flight_stream =
+            FlightRecordBatchStream::new_from_flight_data(flight_stream.map_err(FlightError::from));
+        let stream = flight_stream.map_err(|e| DataFusionError::Execution(e.to_string()));
+        let sendable_stream: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+
+        Ok(sendable_stream)
     }
 
     async fn get_job_status(

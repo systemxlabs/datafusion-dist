@@ -10,15 +10,17 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use arrow::array::RecordBatch;
-use datafusion_execution::TaskContext;
-use datafusion_physical_plan::ExecutionPlan;
+use arrow::datatypes::Schema;
+use datafusion_common::DataFusionError;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::{ExecutionPlan, stream::RecordBatchStreamAdapter};
 
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
-    DistError, DistResult, RecordBatchStream,
+    DistError, DistResult,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
     event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
@@ -235,7 +237,7 @@ impl DistRuntime {
         Ok((job_id, stage0_task_distribution))
     }
 
-    pub async fn execute_local(&self, task_id: TaskId) -> DistResult<RecordBatchStream> {
+    pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
         let stage_id = task_id.stage_id();
 
         let mut guard = self.stages.lock();
@@ -243,6 +245,7 @@ impl DistRuntime {
             .get_mut(&stage_id)
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
         let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize)?;
+        let schema = plan.schema();
         drop(guard);
 
         let mut receiver_stream_builder = ReceiverStreamBuilder::new(2);
@@ -256,7 +259,6 @@ impl DistRuntime {
             while let Some(batch) = df_stream.next().await {
                 let batch = batch.map_err(DistError::from);
                 if tx.send(batch).await.is_err() {
-                    // error means dropped receiver, so nothing will get results anymore
                     return Ok(());
                 }
             }
@@ -266,6 +268,10 @@ impl DistRuntime {
         receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
 
         let stream = receiver_stream_builder.build();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            stream.map_err(DataFusionError::from),
+        ));
 
         let task_stream = TaskStream::new(
             task_id,
@@ -275,14 +281,14 @@ impl DistRuntime {
             stream,
         );
 
-        Ok(task_stream.boxed())
+        Ok(Box::pin(task_stream))
     }
 
     pub async fn execute_remote(
         &self,
         node_id: NodeId,
         task_id: TaskId,
-    ) -> DistResult<RecordBatchStream> {
+    ) -> DistResult<SendableRecordBatchStream> {
         if node_id == self.node_id {
             return Err(DistError::internal(format!(
                 "remote node id {node_id} is actually self"
@@ -577,12 +583,14 @@ pub struct TaskMetrics {
     pub completed: bool,
 }
 
+use datafusion_physical_plan::RecordBatchStream;
+
 pub struct TaskStream {
     pub task_id: TaskId,
     pub task_set_id: Uuid,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
-    pub stream: RecordBatchStream,
+    pub stream: SendableRecordBatchStream,
     pub output_rows: usize,
     pub output_bytes: usize,
     pub completed: bool,
@@ -594,7 +602,7 @@ impl TaskStream {
         task_set_id: Uuid,
         stages: Arc<Mutex<HashMap<StageId, StageState>>>,
         event_sender: Sender<Event>,
-        stream: RecordBatchStream,
+        stream: SendableRecordBatchStream,
     ) -> Self {
         Self {
             task_id,
@@ -610,7 +618,7 @@ impl TaskStream {
 }
 
 impl Stream for TaskStream {
-    type Item = DistResult<RecordBatch>;
+    type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.stream.as_mut().poll_next(cx) {
@@ -626,6 +634,12 @@ impl Stream for TaskStream {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+impl RecordBatchStream for TaskStream {
+    fn schema(&self) -> Arc<Schema> {
+        self.stream.schema()
     }
 }
 
