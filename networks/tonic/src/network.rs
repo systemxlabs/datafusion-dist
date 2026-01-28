@@ -23,7 +23,6 @@ use datafusion_proto::{
 };
 use futures::{StreamExt, TryStreamExt};
 use tonic::transport::{Channel, Endpoint};
-use uuid::Uuid;
 
 use crate::{
     codec::DistPhysicalExtensionEncoder,
@@ -155,7 +154,7 @@ impl DistNetwork for DistTonicNetwork {
     async fn get_job_status(
         &self,
         node_id: NodeId,
-        job_id: Option<Uuid>,
+        job_id: Option<Arc<str>>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
         let mut tonic_client = build_tonic_client(node_id).await?;
 
@@ -184,7 +183,7 @@ impl DistNetwork for DistTonicNetwork {
         Ok(result)
     }
 
-    async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()> {
+    async fn cleanup_job(&self, node_id: NodeId, job_id: Arc<str>) -> DistResult<()> {
         let mut tonic_client = build_tonic_client(node_id).await?;
 
         let req = protobuf::CleanupJobReq {

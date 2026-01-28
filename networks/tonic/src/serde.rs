@@ -8,7 +8,6 @@ use datafusion_dist::{
     planner::{StageId, TaskId},
     runtime::TaskMetrics,
 };
-use uuid::Uuid;
 
 use crate::protobuf;
 
@@ -24,10 +23,8 @@ pub fn serialize_stage_id(stage_id: StageId) -> protobuf::StageId {
 }
 
 pub fn parse_stage_id(proto: protobuf::StageId) -> StageId {
-    let job_id = Uuid::parse_str(&proto.job_id)
-        .unwrap_or_else(|_| panic!("Failed to parse job id {} as uuid", proto.job_id));
     StageId {
-        job_id,
+        job_id: proto.job_id.into(),
         stage: proto.stage,
     }
 }
@@ -45,10 +42,8 @@ pub fn serialize_task_id(task_id: TaskId) -> protobuf::TaskId {
 }
 
 pub fn parse_task_id(proto: protobuf::TaskId) -> TaskId {
-    let job_id = Uuid::parse_str(&proto.job_id)
-        .unwrap_or_else(|_| panic!("Failed to parse job id {} as uuid", proto.job_id));
     TaskId {
-        job_id,
+        job_id: proto.job_id.into(),
         stage: proto.stage,
         partition: proto.partition,
     }
@@ -168,7 +163,7 @@ pub fn serialize_task_distribution(
 ) -> protobuf::TaskDistribution {
     let mut task_nodes = Vec::new();
     for (task_id, node_id) in task_distribution {
-        let task_node = serialize_task_node(*task_id, node_id.clone());
+        let task_node = serialize_task_node(task_id.clone(), node_id.clone());
         task_nodes.push(task_node);
     }
     protobuf::TaskDistribution {

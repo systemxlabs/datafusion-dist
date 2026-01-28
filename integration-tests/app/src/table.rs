@@ -39,7 +39,7 @@ impl RunningJobsTable {
         let mut stages_builder = StringBuilder::new();
 
         for (job_id, stages) in job_stats {
-            job_id_builder.append_value(job_id.to_string());
+            job_id_builder.append_value(&job_id);
 
             let stages = stages
                 .into_iter()

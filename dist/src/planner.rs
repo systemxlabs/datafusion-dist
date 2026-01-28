@@ -14,7 +14,6 @@ use datafusion_physical_plan::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{
     DistError, DistResult,
@@ -26,21 +25,21 @@ use crate::{
 pub trait DistPlanner: Debug + Send + Sync {
     fn plan_stages(
         &self,
-        job_id: Uuid,
+        job_id: Arc<str>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StageId {
-    pub job_id: Uuid,
+    pub job_id: Arc<str>,
     pub stage: u32,
 }
 
 impl StageId {
     pub fn task_id(&self, partition: u32) -> TaskId {
         TaskId {
-            job_id: self.job_id,
+            job_id: self.job_id.clone(),
             stage: self.stage,
             partition,
         }
@@ -53,9 +52,9 @@ impl Display for StageId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TaskId {
-    pub job_id: Uuid,
+    pub job_id: Arc<str>,
     pub stage: u32,
     pub partition: u32,
 }
@@ -63,7 +62,7 @@ pub struct TaskId {
 impl TaskId {
     pub fn stage_id(&self) -> StageId {
         StageId {
-            job_id: self.job_id,
+            job_id: self.job_id.clone(),
             stage: self.stage,
         }
     }
@@ -81,7 +80,7 @@ pub struct DefaultPlanner;
 impl DistPlanner for DefaultPlanner {
     fn plan_stages(
         &self,
-        job_id: Uuid,
+        job_id: Arc<str>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>> {
         let mut stage_count = 0u32;
@@ -102,10 +101,10 @@ impl DistPlanner for DefaultPlanner {
 
                     for child in node.children() {
                         let stage_id = StageId {
-                            job_id,
+                            job_id: job_id.clone(),
                             stage: stage_count,
                         };
-                        stage_plans.insert(stage_id, child.clone());
+                        stage_plans.insert(stage_id.clone(), child.clone());
                         stage_count -= 1;
 
                         let new_child = UnresolvedExec::new(stage_id, child.clone());
@@ -146,32 +145,32 @@ pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
 }
 
 pub fn check_initial_stage_plans(
-    job_id: Uuid,
+    job_id: Arc<str>,
     stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
 ) -> DistResult<()> {
     if stage_plans.is_empty() {
         return Err(DistError::internal("Stage plans cannot be empty"));
     }
 
-    // Check that stage 0 exists
-    let stage0 = StageId { job_id, stage: 0 };
+    let stage0 = StageId {
+        job_id: job_id.clone(),
+        stage: 0,
+    };
     if !stage_plans.contains_key(&stage0) {
         return Err(DistError::internal("Stage 0 must exist in stage plans"));
     }
 
-    // Collect all stage IDs that are depended upon by other stages
     let mut depended_stages: HashSet<StageId> = HashSet::new();
 
     for (_, plan) in stage_plans.iter() {
         plan.apply(|node| {
             if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
-                depended_stages.insert(unresolved.delegated_stage_id);
+                depended_stages.insert(unresolved.delegated_stage_id.clone());
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
     }
 
-    // Check that every stage except stage 0 is depended upon
     for stage_id in stage_plans.keys() {
         if stage_id.stage != 0 && !depended_stages.contains(stage_id) {
             return Err(DistError::internal(format!(

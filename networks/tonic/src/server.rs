@@ -17,7 +17,6 @@ use datafusion_proto::{
 };
 use futures::{Stream, StreamExt, TryStreamExt};
 use tonic::{Request, Response, Status};
-use uuid::Uuid;
 
 use crate::{
     codec::DistPhysicalExtensionDecoder,
@@ -112,9 +111,13 @@ impl DistTonicService for DistTonicServer {
         request: Request<protobuf::TaskId>,
     ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
         let task_id = parse_task_id(request.into_inner());
-        let record_batch_stream = self.runtime.execute_local(task_id).await.map_err(|e| {
-            Status::internal(format!("Failed to execute local task {task_id}: {e}"))
-        })?;
+        let record_batch_stream =
+            self.runtime
+                .execute_local(task_id.clone())
+                .await
+                .map_err(|e| {
+                    Status::internal(format!("Failed to execute local task {task_id}: {e}"))
+                })?;
 
         let schema = record_batch_stream.schema();
 
@@ -142,11 +145,7 @@ impl DistTonicService for DistTonicServer {
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
         let status: HashMap<StageId, StageInfo> = match request.into_inner().job_id {
-            Some(id) => {
-                let job_id = Uuid::parse_str(&id)
-                    .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
-                self.runtime.get_local_job(job_id)
-            }
+            Some(id) => self.runtime.get_local_job(id.into()),
             None => self
                 .runtime
                 .get_local_jobs()
@@ -167,10 +166,9 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<CleanupJobReq>,
     ) -> Result<Response<CleanupJobResp>, Status> {
-        let job_id = Uuid::parse_str(&request.into_inner().job_id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid job_id: {e}")))?;
+        let job_id = request.into_inner().job_id;
 
-        self.runtime.cleanup_local_job(job_id);
+        self.runtime.cleanup_local_job(job_id.into());
 
         Ok(Response::new(CleanupJobResp {}))
     }

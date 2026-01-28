@@ -17,7 +17,6 @@ use datafusion_dist::{
 };
 use futures::TryStreamExt;
 use tonic::transport::Endpoint;
-use uuid::Uuid;
 
 use crate::data::build_session_context;
 
@@ -97,7 +96,7 @@ pub async fn assert_planner(
     assert_eq!(plan_str, expected_plan);
 
     let dist_planner = DefaultPlanner {};
-    let stage_plans = dist_planner.plan_stages(Uuid::new_v4(), plan).unwrap();
+    let stage_plans = dist_planner.plan_stages("test-job".into(), plan).unwrap();
     let actual = DisplayableStagePlans(&stage_plans).to_string();
     println!("Planner output: {actual}");
     assert_eq!(actual, expected_stage_plans);

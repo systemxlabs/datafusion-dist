@@ -48,7 +48,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         if let Some(exec) = node.as_any().downcast_ref::<ProxyExec>() {
-            let proto_stage_id = serialize_stage_id(exec.delegated_stage_id);
+            let proto_stage_id = serialize_stage_id(exec.delegated_stage_id.clone());
             let proto_partitioning = serialize_partitioning(
                 &exec.delegated_plan_properties.partitioning,
                 self.app_extension_codec.as_ref(),
