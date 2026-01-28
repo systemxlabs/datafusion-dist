@@ -56,6 +56,9 @@ pub struct StageInfo {
     pub assigned_partitions: ::prost::alloc::vec::Vec<u32>,
     #[prost(message, repeated, tag = "4")]
     pub task_set_infos: ::prost::alloc::vec::Vec<TaskSetInfo>,
+    #[prost(map = "string, string", tag = "5")]
+    pub job_meta:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TaskSetInfo {
