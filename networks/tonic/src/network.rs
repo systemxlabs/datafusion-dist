@@ -9,7 +9,7 @@ use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use datafusion_common::DataFusionError;
 use datafusion_dist::{
-    DistError, DistResult,
+    DistError, DistResult, JobId,
     cluster::NodeId,
     network::{DistNetwork, ScheduledTasks, StageInfo},
     planner::{StageId, TaskId},
@@ -154,7 +154,7 @@ impl DistNetwork for DistTonicNetwork {
     async fn get_job_status(
         &self,
         node_id: NodeId,
-        job_id: Option<Arc<str>>,
+        job_id: Option<JobId>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
         let mut tonic_client = build_tonic_client(node_id).await?;
 
@@ -183,7 +183,7 @@ impl DistNetwork for DistTonicNetwork {
         Ok(result)
     }
 
-    async fn cleanup_job(&self, node_id: NodeId, job_id: Arc<str>) -> DistResult<()> {
+    async fn cleanup_job(&self, node_id: NodeId, job_id: JobId) -> DistResult<()> {
         let mut tonic_client = build_tonic_client(node_id).await?;
 
         let req = protobuf::CleanupJobReq {

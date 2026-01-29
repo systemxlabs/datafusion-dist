@@ -20,7 +20,7 @@ use log::{debug, error};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
-    DistError, DistResult,
+    DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
     event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
@@ -125,7 +125,7 @@ impl DistRuntime {
 
     pub async fn submit(
         &self,
-        job_id: impl Into<Arc<str>>,
+        job_id: impl Into<JobId>,
         plan: Arc<dyn ExecutionPlan>,
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
@@ -348,7 +348,7 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub fn cleanup_local_job(&self, job_id: Arc<str>) {
+    pub fn cleanup_local_job(&self, job_id: JobId) {
         let mut guard = self.stages.lock();
         let stage_ids = guard
             .iter()
@@ -368,7 +368,7 @@ impl DistRuntime {
         }
     }
 
-    pub async fn cleanup_job(&self, job_id: Arc<str>) -> DistResult<()> {
+    pub async fn cleanup_job(&self, job_id: JobId) -> DistResult<()> {
         cleanup_job(
             &self.node_id,
             &self.cluster,
@@ -379,14 +379,14 @@ impl DistRuntime {
         .await
     }
 
-    pub fn get_local_job(&self, job_id: Arc<str>) -> HashMap<StageId, StageInfo> {
+    pub fn get_local_job(&self, job_id: JobId) -> HashMap<StageId, StageInfo> {
         local_stage_stats(&self.stages, Some(job_id))
     }
 
-    pub fn get_local_jobs(&self) -> HashMap<Arc<str>, HashMap<StageId, StageInfo>> {
+    pub fn get_local_jobs(&self) -> HashMap<JobId, HashMap<StageId, StageInfo>> {
         let stage_stat = local_stage_stats(&self.stages, None);
 
-        let mut job_stats: HashMap<Arc<str>, HashMap<StageId, StageInfo>> = HashMap::new();
+        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in stage_stat {
             job_stats
                 .entry(stage_id.job_id.clone())
@@ -397,7 +397,7 @@ impl DistRuntime {
         job_stats
     }
 
-    pub async fn get_all_jobs(&self) -> DistResult<HashMap<Arc<str>, HashMap<StageId, StageInfo>>> {
+    pub async fn get_all_jobs(&self) -> DistResult<HashMap<JobId, HashMap<StageId, StageInfo>>> {
         let mut combined_status = local_stage_stats(&self.stages, None);
 
         let node_states = self.cluster.alive_nodes().await?;
@@ -430,7 +430,7 @@ impl DistRuntime {
             }
         }
 
-        let mut job_stats: HashMap<Arc<str>, HashMap<StageId, StageInfo>> = HashMap::new();
+        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in combined_status {
             job_stats
                 .entry(stage_id.job_id.clone())

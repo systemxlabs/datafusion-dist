@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    DistResult,
+    DistResult, JobId,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
     network::{DistNetwork, StageInfo},
@@ -15,8 +15,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    CheckJobCompleted(Arc<str>),
-    CleanupJob(Arc<str>),
+    CheckJobCompleted(JobId),
+    CleanupJob(JobId),
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
@@ -54,7 +54,7 @@ impl EventHandler {
         }
     }
 
-    async fn handle_check_job_completed(&mut self, job_id: Arc<str>) {
+    async fn handle_check_job_completed(&mut self, job_id: JobId) {
         match check_job_completed(
             &self.cluster,
             &self.network,
@@ -77,7 +77,7 @@ impl EventHandler {
         }
     }
 
-    async fn handle_cleanup_job(&mut self, job_id: Arc<str>) {
+    async fn handle_cleanup_job(&mut self, job_id: JobId) {
         if let Err(e) = cleanup_job(
             &self.local_node,
             &self.cluster,
@@ -131,7 +131,7 @@ pub async fn check_job_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Arc<str>,
+    job_id: JobId,
 ) -> DistResult<Option<bool>> {
     let mut combined_status = local_stage_stats(local_stages, Some(job_id.clone()));
 
@@ -192,7 +192,7 @@ pub async fn check_job_completed(
 
 pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Option<Arc<str>>,
+    job_id: Option<JobId>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock();
 
@@ -212,7 +212,7 @@ pub async fn cleanup_job(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Arc<str>,
+    job_id: JobId,
 ) -> DistResult<()> {
     let alive_nodes = cluster.alive_nodes().await?;
 

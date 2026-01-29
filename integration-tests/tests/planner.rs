@@ -138,7 +138,9 @@ async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let dist_planner = DefaultPlanner {};
-    let stage_plans = dist_planner.plan_stages(Uuid::new_v4(), plan).unwrap();
+    let stage_plans = dist_planner
+        .plan_stages(Uuid::new_v4().to_string().as_str().into(), plan)
+        .unwrap();
     let actual = DisplayableStagePlans(&stage_plans).to_string();
     println!("Planner output: {actual}");
     assert_eq!(

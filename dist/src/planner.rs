@@ -16,7 +16,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DistError, DistResult,
+    DistError, DistResult, JobId,
     cluster::NodeId,
     physical_plan::{ProxyExec, UnresolvedExec},
     runtime::DistRuntime,
@@ -25,14 +25,14 @@ use crate::{
 pub trait DistPlanner: Debug + Send + Sync {
     fn plan_stages(
         &self,
-        job_id: Arc<str>,
+        job_id: JobId,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StageId {
-    pub job_id: Arc<str>,
+    pub job_id: JobId,
     pub stage: u32,
 }
 
@@ -54,7 +54,7 @@ impl Display for StageId {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TaskId {
-    pub job_id: Arc<str>,
+    pub job_id: JobId,
     pub stage: u32,
     pub partition: u32,
 }
@@ -80,7 +80,7 @@ pub struct DefaultPlanner;
 impl DistPlanner for DefaultPlanner {
     fn plan_stages(
         &self,
-        job_id: Arc<str>,
+        job_id: JobId,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>> {
         let mut stage_count = 0u32;
@@ -145,7 +145,7 @@ pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
 }
 
 pub fn check_initial_stage_plans(
-    job_id: Arc<str>,
+    job_id: JobId,
     stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
 ) -> DistResult<()> {
     if stage_plans.is_empty() {
