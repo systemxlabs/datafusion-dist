@@ -13,8 +13,4 @@ pub mod util;
 
 pub use error::{DistError, DistResult};
 
-use std::sync::Arc;
-
-pub type JobId = Arc<str>;
-
-pub use planner::{StageId, TaskId};
+pub type JobId = std::sync::Arc<str>;
