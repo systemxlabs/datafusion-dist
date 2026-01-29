@@ -22,7 +22,7 @@ use log::{debug, error};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
-    DistError, DistResult,
+    DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
     event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
@@ -127,21 +127,22 @@ impl DistRuntime {
 
     pub async fn submit(
         &self,
+        job_id: impl Into<JobId>,
         plan: Arc<dyn ExecutionPlan>,
         job_meta: Arc<HashMap<String, String>>,
-    ) -> DistResult<(Uuid, HashMap<TaskId, NodeId>)> {
-        let job_id = Uuid::new_v4();
+    ) -> DistResult<HashMap<TaskId, NodeId>> {
+        let job_id = job_id.into();
         debug!(
             "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
 
-        let mut stage_plans = self.planner.plan_stages(job_id, plan)?;
+        let mut stage_plans = self.planner.plan_stages(job_id.clone(), plan)?;
         debug!(
             "job {job_id} initial stage plans:\n{}",
             DisplayableStagePlans(&stage_plans)
         );
-        check_initial_stage_plans(job_id, &stage_plans)?;
+        check_initial_stage_plans(job_id.clone(), &stage_plans)?;
 
         let node_states = self.cluster.alive_nodes().await?;
         debug!(
@@ -164,7 +165,7 @@ impl DistRuntime {
         let stage0_task_distribution: HashMap<TaskId, NodeId> = task_distribution
             .iter()
             .filter(|(task_id, _)| task_id.stage == 0)
-            .map(|(task_id, node_id)| (*task_id, node_id.clone()))
+            .map(|(task_id, node_id)| (task_id.clone(), node_id.clone()))
             .collect();
         if stage0_task_distribution.is_empty() {
             return Err(DistError::internal(format!(
@@ -191,7 +192,7 @@ impl DistRuntime {
             node_tasks
                 .entry(node_id.clone())
                 .or_insert_with(Vec::new)
-                .push(*task_id);
+                .push(task_id.clone());
         }
 
         // Send stage plans to cluster nodes
@@ -201,7 +202,7 @@ impl DistRuntime {
                 .iter()
                 .map(|stage_id| {
                     (
-                        *stage_id,
+                        stage_id.clone(),
                         stage_plans
                             .get(stage_id)
                             .cloned()
@@ -246,7 +247,7 @@ impl DistRuntime {
 
         logging_executor_metrics(self.executor.handle());
 
-        Ok((job_id, stage0_task_distribution))
+        Ok(stage0_task_distribution)
     }
 
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
@@ -354,7 +355,7 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub fn cleanup_local_job(&self, job_id: Uuid) {
+    pub fn cleanup_local_job(&self, job_id: JobId) {
         let mut guard = self.stages.lock();
         let stage_ids = guard
             .iter()
@@ -374,7 +375,7 @@ impl DistRuntime {
         }
     }
 
-    pub async fn cleanup_job(&self, job_id: Uuid) -> DistResult<()> {
+    pub async fn cleanup_job(&self, job_id: JobId) -> DistResult<()> {
         cleanup_job(
             &self.node_id,
             &self.cluster,
@@ -385,18 +386,17 @@ impl DistRuntime {
         .await
     }
 
-    pub fn get_local_job(&self, job_id: Uuid) -> HashMap<StageId, StageInfo> {
+    pub fn get_local_job(&self, job_id: JobId) -> HashMap<StageId, StageInfo> {
         local_stage_stats(&self.stages, Some(job_id))
     }
 
-    pub fn get_local_jobs(&self) -> HashMap<Uuid, HashMap<StageId, StageInfo>> {
+    pub fn get_local_jobs(&self) -> HashMap<JobId, HashMap<StageId, StageInfo>> {
         let stage_stat = local_stage_stats(&self.stages, None);
 
-        // Aggregate stats by job_id
-        let mut job_stats: HashMap<Uuid, HashMap<StageId, StageInfo>> = HashMap::new();
+        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in stage_stat {
             job_stats
-                .entry(stage_id.job_id)
+                .entry(stage_id.job_id.clone())
                 .or_default()
                 .insert(stage_id, stage_info);
         }
@@ -404,7 +404,7 @@ impl DistRuntime {
         job_stats
     }
 
-    pub async fn get_all_jobs(&self) -> DistResult<HashMap<Uuid, HashMap<StageId, StageInfo>>> {
+    pub async fn get_all_jobs(&self) -> DistResult<HashMap<JobId, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
         let mut combined_status = local_stage_stats(&self.stages, None);
 
@@ -440,10 +440,10 @@ impl DistRuntime {
         }
 
         // Aggregate stats by job_id
-        let mut job_stats: HashMap<Uuid, HashMap<StageId, StageInfo>> = HashMap::new();
+        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in combined_status {
             job_stats
-                .entry(stage_id.job_id)
+                .entry(stage_id.job_id.clone())
                 .or_default()
                 .insert(stage_id, stage_info);
         }
@@ -476,7 +476,7 @@ impl StageState {
         let mut stage_states = HashMap::new();
         for (stage_id, assigned_task_ids) in stage_tasks {
             let stage_state = StageState {
-                stage_id,
+                stage_id: stage_id.clone(),
                 create_at_ms: timestamp_ms(),
                 stage_plan: scheduled_tasks
                     .stage_plans
@@ -659,7 +659,7 @@ impl RecordBatchStream for TaskStream {
 
 impl Drop for TaskStream {
     fn drop(&mut self) {
-        let task_id = self.task_id;
+        let task_id = self.task_id.clone();
         let task_set_id = self.task_set_id;
         let task_metrics = TaskMetrics {
             output_bytes: self.output_bytes,
@@ -675,7 +675,7 @@ impl Drop for TaskStream {
             {
                 let mut guard = stages.lock();
                 if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
-                    stage_state.complete_task(task_id, task_set_id, task_metrics);
+                    stage_state.complete_task(task_id.clone(), task_set_id, task_metrics);
                     if stage_state.stage_id.stage == 0
                         && stage_state.assigned_partitions_executed_at_least_once()
                     {
@@ -685,7 +685,9 @@ impl Drop for TaskStream {
             }
 
             if send_event
-                && let Err(e) = sender.send(Event::CheckJobCompleted(task_id.job_id)).await
+                && let Err(e) = sender
+                    .send(Event::CheckJobCompleted(task_id.job_id.clone()))
+                    .await
             {
                 error!(
                     "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
@@ -705,7 +707,7 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
             for (stage_id, stage_state) in guard.iter() {
                 let age_ms = timestamp_ms() - stage_state.create_at_ms;
                 if age_ms >= config.job_ttl.as_millis() as i64 {
-                    to_cleanup.push(*stage_id);
+                    to_cleanup.push(stage_id.clone());
                 }
             }
 

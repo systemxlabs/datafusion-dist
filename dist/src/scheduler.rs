@@ -112,18 +112,26 @@ impl DistScheduler for DefaultScheduler {
             if let Some(assign_self) = &self.assign_self
                 && assign_self(plan)
             {
-                assignments.extend(assign_stage_tasks_to_self(*stage_id, plan, local_node));
+                assignments.extend(assign_stage_tasks_to_self(
+                    stage_id.clone(),
+                    plan,
+                    local_node,
+                ));
                 continue;
             }
 
             if contains_large_memory_datasource(plan, self.memory_datasource_size_threshold) {
-                assignments.extend(assign_stage_tasks_to_self(*stage_id, plan, local_node));
+                assignments.extend(assign_stage_tasks_to_self(
+                    stage_id.clone(),
+                    plan,
+                    local_node,
+                ));
                 continue;
             }
 
             if is_plan_fully_pipelined(plan) {
                 let assignment = assign_stage_tasks_to_all_nodes(
-                    *stage_id,
+                    stage_id.clone(),
                     plan,
                     &available_nodes,
                     &mut task_index,
@@ -131,7 +139,7 @@ impl DistScheduler for DefaultScheduler {
                 assignments.extend(assignment);
             } else {
                 let assignment = assign_stage_all_tasks_to_node(
-                    *stage_id,
+                    stage_id.clone(),
                     plan,
                     &available_nodes,
                     &mut stage_index,

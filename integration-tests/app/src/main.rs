@@ -213,7 +213,7 @@ impl FlightSqlService for TestFlightSqlService {
             port: node_task.port as u16,
         };
         let task_id = TaskId {
-            job_id: Uuid::parse_str(&node_task.job_id).expect("job id is not uuid"),
+            job_id: node_task.job_id.into(),
             stage: node_task.stage,
             partition: node_task.partition,
         };
@@ -271,9 +271,10 @@ impl FlightSqlService for TestFlightSqlService {
 
         let mut job_meta = HashMap::new();
         job_meta.insert("query".to_string(), query.query.clone());
-        let (_job_id, stage0_task_distribution) = self
+        let job_id = Uuid::new_v4().to_string();
+        let stage0_task_distribution = self
             .runtime
-            .submit(plan, Arc::new(job_meta))
+            .submit(job_id.as_str(), plan, Arc::new(job_meta))
             .await
             .map_err(|e| Status::from_error(Box::new(e)))?;
         info!("Stage0 task distribution: {:?}", stage0_task_distribution);

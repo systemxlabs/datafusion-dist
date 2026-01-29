@@ -7,10 +7,9 @@ use std::{
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_physical_plan::ExecutionPlan;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{
-    DistError, DistResult,
+    DistError, DistResult, JobId,
     cluster::NodeId,
     planner::{StageId, TaskId},
     runtime::{StageState, TaskMetrics, TaskSet},
@@ -31,10 +30,10 @@ pub trait DistNetwork: Debug + Send + Sync {
     async fn get_job_status(
         &self,
         node_id: NodeId,
-        job_id: Option<Uuid>,
+        job_id: Option<JobId>,
     ) -> DistResult<HashMap<StageId, StageInfo>>;
 
-    async fn cleanup_job(&self, node_id: NodeId, job_id: Uuid) -> DistResult<()>;
+    async fn cleanup_job(&self, node_id: NodeId, job_id: JobId) -> DistResult<()>;
 }
 
 pub struct ScheduledTasks {
@@ -59,10 +58,10 @@ impl ScheduledTasks {
         }
     }
 
-    pub fn job_id(&self) -> DistResult<Uuid> {
+    pub fn job_id(&self) -> DistResult<JobId> {
         self.task_ids
             .first()
-            .map(|task_id| task_id.job_id)
+            .map(|task_id| task_id.job_id.clone())
             .ok_or_else(|| DistError::internal("ScheduledTasks has no task_ids".to_string()))
     }
 }

@@ -3,10 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use log::{debug, error};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
-use uuid::Uuid;
 
 use crate::{
-    DistResult,
+    DistResult, JobId,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
     network::{DistNetwork, StageInfo},
@@ -16,8 +15,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    CheckJobCompleted(Uuid),
-    CleanupJob(Uuid),
+    CheckJobCompleted(JobId),
+    CleanupJob(JobId),
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
@@ -55,12 +54,19 @@ impl EventHandler {
         }
     }
 
-    async fn handle_check_job_completed(&mut self, job_id: Uuid) {
-        match check_job_completed(&self.cluster, &self.network, &self.local_stages, job_id).await {
+    async fn handle_check_job_completed(&mut self, job_id: JobId) {
+        match check_job_completed(
+            &self.cluster,
+            &self.network,
+            &self.local_stages,
+            job_id.clone(),
+        )
+        .await
+        {
             Ok(Some(true)) => {
                 debug!("Job {job_id} completed, remove it from cluster");
 
-                if let Err(e) = self.sender.send(Event::CleanupJob(job_id)).await {
+                if let Err(e) = self.sender.send(Event::CleanupJob(job_id.clone())).await {
                     error!("Failed to send cleanup job event for job {job_id}: {e}");
                 }
             }
@@ -71,13 +77,13 @@ impl EventHandler {
         }
     }
 
-    async fn handle_cleanup_job(&mut self, job_id: Uuid) {
+    async fn handle_cleanup_job(&mut self, job_id: JobId) {
         if let Err(e) = cleanup_job(
             &self.local_node,
             &self.cluster,
             &self.network,
             &self.local_stages,
-            job_id,
+            job_id.clone(),
         )
         .await
         {
@@ -108,7 +114,9 @@ impl EventHandler {
             }
 
             if let Some(stage_id) = timeout_stage0_id
-                && let Err(e) = sender.send(Event::CleanupJob(stage_id.job_id)).await
+                && let Err(e) = sender
+                    .send(Event::CleanupJob(stage_id.job_id.clone()))
+                    .await
             {
                 error!(
                     "Failed to send CleanupJob event for job {}: {e}",
@@ -123,10 +131,10 @@ pub async fn check_job_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Uuid,
+    job_id: JobId,
 ) -> DistResult<Option<bool>> {
     // First, get local status
-    let mut combined_status = local_stage_stats(local_stages, Some(job_id));
+    let mut combined_status = local_stage_stats(local_stages, Some(job_id.clone()));
 
     // Then, get status from all other alive nodes
     let node_states = cluster.alive_nodes().await?;
@@ -138,6 +146,7 @@ pub async fn check_job_completed(
         if *node_id != local_node_id {
             let network = network.clone();
             let node_id = node_id.clone();
+            let job_id = job_id.clone();
             let handle =
                 tokio::spawn(async move { network.get_job_status(node_id, Some(job_id)).await });
             handles.push(handle);
@@ -161,7 +170,10 @@ pub async fn check_job_completed(
         }
     }
 
-    let stage0 = StageId { job_id, stage: 0 };
+    let stage0 = StageId {
+        job_id: job_id.clone(),
+        stage: 0,
+    };
 
     let Some(stage0_info) = combined_status.get(&stage0) else {
         return Ok(None);
@@ -183,15 +195,15 @@ pub async fn check_job_completed(
 
 pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Option<Uuid>,
+    job_id: Option<JobId>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock();
 
     let mut result = HashMap::new();
     for (stage_id, stage_state) in guard.iter() {
-        if job_id.is_none() || stage_id.job_id == job_id.unwrap() {
+        if job_id.is_none() || stage_id.job_id.as_ref() == job_id.as_ref().unwrap().as_ref() {
             let stage_info = StageInfo::from_stage_state(stage_state);
-            result.insert(*stage_id, stage_info);
+            result.insert(stage_id.clone(), stage_info);
         }
     }
 
@@ -203,7 +215,7 @@ pub async fn cleanup_job(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Uuid,
+    job_id: JobId,
 ) -> DistResult<()> {
     let alive_nodes = cluster.alive_nodes().await?;
 
@@ -213,8 +225,7 @@ pub async fn cleanup_job(
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
             drop(guard);
         } else {
-            // Send cleanup request to remote node
-            network.cleanup_job(node_id.clone(), job_id).await?
+            network.cleanup_job(node_id.clone(), job_id.clone()).await?
         }
     }
     Ok(())

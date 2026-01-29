@@ -48,7 +48,7 @@ impl ProxyExec {
             delegated_task_distribution.insert(task_id, node_id.clone());
         }
         Ok(ProxyExec {
-            delegated_stage_id: unresolved.delegated_stage_id,
+            delegated_stage_id: unresolved.delegated_stage_id.clone(),
             delegated_plan_name: unresolved.delegated_plan.name().to_string(),
             delegated_plan_properties: unresolved.delegated_plan.properties().clone(),
             delegated_task_distribution,
