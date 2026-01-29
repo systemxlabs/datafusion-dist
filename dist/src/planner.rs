@@ -152,6 +152,7 @@ pub fn check_initial_stage_plans(
         return Err(DistError::internal("Stage plans cannot be empty"));
     }
 
+    // Check that stage 0 exists
     let stage0 = StageId {
         job_id: job_id.clone(),
         stage: 0,
@@ -160,6 +161,7 @@ pub fn check_initial_stage_plans(
         return Err(DistError::internal("Stage 0 must exist in stage plans"));
     }
 
+    // Collect all stage IDs that are depended upon by other stages
     let mut depended_stages: HashSet<StageId> = HashSet::new();
 
     for (_, plan) in stage_plans.iter() {
@@ -171,6 +173,7 @@ pub fn check_initial_stage_plans(
         })?;
     }
 
+    // Check that every stage except stage 0 is depended upon
     for stage_id in stage_plans.keys() {
         if stage_id.stage != 0 && !depended_stages.contains(stage_id) {
             return Err(DistError::internal(format!(

@@ -133,8 +133,10 @@ pub async fn check_job_completed(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: JobId,
 ) -> DistResult<Option<bool>> {
+    // First, get local status
     let mut combined_status = local_stage_stats(local_stages, Some(job_id.clone()));
 
+    // Then, get status from all other alive nodes
     let node_states = cluster.alive_nodes().await?;
 
     let local_node_id = network.local_node();
@@ -177,6 +179,7 @@ pub async fn check_job_completed(
         return Ok(None);
     };
 
+    // Check if all assigned partitions are completed
     for partition in &stage0_info.assigned_partitions {
         let is_completed = stage0_info
             .task_set_infos

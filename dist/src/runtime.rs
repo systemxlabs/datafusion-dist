@@ -13,7 +13,9 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_plan::{ExecutionPlan, stream::RecordBatchStreamAdapter};
+use datafusion_physical_plan::{
+    ExecutionPlan, display::DisplayableExecutionPlan, stream::RecordBatchStreamAdapter,
+};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
@@ -130,6 +132,11 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         let job_id = job_id.into();
+        debug!(
+            "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
+            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+        );
+
         let mut stage_plans = self.planner.plan_stages(job_id.clone(), plan)?;
         debug!(
             "job {job_id} initial stage plans:\n{}",
@@ -398,8 +405,10 @@ impl DistRuntime {
     }
 
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<JobId, HashMap<StageId, StageInfo>>> {
+        // First, get local status for all jobs
         let mut combined_status = local_stage_stats(&self.stages, None);
 
+        // Then, get status from all other alive nodes
         let node_states = self.cluster.alive_nodes().await?;
 
         let mut handles = Vec::new();
@@ -430,6 +439,7 @@ impl DistRuntime {
             }
         }
 
+        // Aggregate stats by job_id
         let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
         for (stage_id, stage_info) in combined_status {
             job_stats
