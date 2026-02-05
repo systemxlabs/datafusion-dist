@@ -78,6 +78,14 @@ impl DistScheduler for DefaultScheduler {
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
+        if let Some(state) = node_states.get(local_node)
+            && matches!(state.status, NodeStatus::Terminating)
+        {
+            return Err(DistError::schedule(
+                "Local node is in Terminating status, cannot schedule tasks",
+            ));
+        }
+
         // Filter out nodes that are in Terminating status
         let available_nodes: HashMap<NodeId, NodeState> = node_states
             .iter()

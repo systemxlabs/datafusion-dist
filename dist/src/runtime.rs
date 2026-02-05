@@ -313,6 +313,12 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        if matches!(*self.status.lock(), NodeStatus::Terminating) {
+            return Err(DistError::internal(
+                "Local node is in Terminating status, cannot receive tasks",
+            ));
+        }
+
         debug!(
             "Received job {} tasks: [{}] and plans of stages: [{}]",
             scheduled_tasks.job_id()?,
