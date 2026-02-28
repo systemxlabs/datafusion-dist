@@ -17,7 +17,6 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 derive-with = { workspace = true }
-embassy-time = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 local-ip-address = { workspace = true }

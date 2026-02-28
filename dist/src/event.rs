@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use backon::{ExponentialBuilder, Retryable};
-use embassy_time::WithTimeout;
 use log::{debug, error};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -22,7 +21,7 @@ pub enum Event {
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
-const EVENT_SEND_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_secs(300);
+const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
 
@@ -34,14 +33,12 @@ fn job_check_retry_strategy() -> ExponentialBuilder {
 }
 
 pub async fn send_event_with_timeout(sender: &Sender<Event>, event: Event) -> DistResult<()> {
-    sender
-        .send(event)
-        .with_timeout(EVENT_SEND_TIMEOUT)
+    tokio::time::timeout(EVENT_SEND_TIMEOUT, sender.send(event))
         .await
         .map_err(|_| {
             DistError::internal(format!(
                 "Timed out sending event after {}s",
-                EVENT_SEND_TIMEOUT.as_millis()
+                EVENT_SEND_TIMEOUT.as_secs()
             ))
         })?
         .map_err(|e| DistError::internal(format!("Failed to send event: {e}")))
