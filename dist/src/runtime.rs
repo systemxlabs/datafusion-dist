@@ -25,7 +25,10 @@ use crate::{
     DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
-    event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
+    event::{
+        Event, EventHandler, cleanup_job, local_stage_stats, send_event_with_timeout,
+        start_event_handler,
+    },
     executor::{DefaultExecutor, DistExecutor, logging_executor_metrics},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
@@ -350,12 +353,8 @@ impl DistRuntime {
             .cloned()
             .collect::<Vec<StageId>>();
         if !stage0_ids.is_empty() {
-            self.event_sender
-                .send(Event::ReceivedStage0Tasks(stage0_ids))
-                .await
-                .map_err(|e| {
-                    DistError::internal(format!("Failed to send ReceivedStage0Tasks event: {e}"))
-                })?;
+            send_event_with_timeout(&self.event_sender, Event::ReceivedStage0Tasks(stage0_ids))
+                .await?;
         }
 
         Ok(())
@@ -691,9 +690,11 @@ impl Drop for TaskStream {
             }
 
             if send_event
-                && let Err(e) = sender
-                    .send(Event::CheckJobCompleted(task_id.job_id.clone()))
-                    .await
+                && let Err(e) = send_event_with_timeout(
+                    &sender,
+                    Event::CheckJobCompleted(task_id.job_id.clone()),
+                )
+                .await
             {
                 error!(
                     "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
