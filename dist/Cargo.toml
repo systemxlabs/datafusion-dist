@@ -11,6 +11,7 @@ readme = "../README.md"
 [dependencies]
 async-trait = { workspace = true }
 arrow = { workspace = true }
+backon = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
