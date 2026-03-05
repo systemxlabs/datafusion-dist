@@ -124,7 +124,7 @@ impl DistCluster for PostgresCluster {
         let client = self.pool.get().await.map_err(PostgresClusterError::Pool)?;
 
         let query = format!(
-            r#"SELECT host, port, status, total_memory, used_memory, free_memory, available_memory, global_cpu_usage, num_running_tasks, pending_task_num
+            r#"SELECT host, port, status, total_memory, used_memory, free_memory, available_memory, global_cpu_usage, num_running_tasks, num_pending_tasks
                 FROM {} WHERE last_heartbeat >= $1"#,
             self.table
         );
