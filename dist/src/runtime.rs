@@ -510,6 +510,22 @@ impl StageState {
             .sum()
     }
 
+    pub fn num_pending_tasks(&self) -> usize {
+        let executed_partitions: HashSet<usize> = self
+            .task_sets
+            .iter()
+            .flat_map(|task_set| {
+                let mut executed = task_set.running_partitions.clone();
+                executed.extend(task_set.dropped_partitions.keys());
+                executed
+            })
+            .collect();
+
+        self.assigned_partitions
+            .difference(&executed_partitions)
+            .count()
+    }
+
     pub fn get_plan(&mut self, partition: usize) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
         if !self.assigned_partitions.contains(&partition) {
             let task_id = self.stage_id.task_id(partition as u32);

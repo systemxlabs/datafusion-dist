@@ -21,10 +21,12 @@ pub struct Heartbeater {
 impl Heartbeater {
     pub async fn send_heartbeat(&self) {
         let mut num_running_tasks = 0;
+        let mut num_pending_tasks = 0;
         {
             let guard = self.stages.lock();
             for (_, state) in guard.iter() {
                 num_running_tasks += state.num_running_tasks();
+                num_pending_tasks += state.num_pending_tasks();
             }
             drop(guard);
         }
@@ -41,6 +43,7 @@ impl Heartbeater {
             available_memory: sys.available_memory(),
             global_cpu_usage: sys.global_cpu_usage(),
             num_running_tasks: num_running_tasks as u32,
+            num_pending_tasks: num_pending_tasks as u32,
         };
         match self
             .cluster
