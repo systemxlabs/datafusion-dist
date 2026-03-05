@@ -43,7 +43,7 @@ impl Heartbeater {
             available_memory: sys.available_memory(),
             global_cpu_usage: sys.global_cpu_usage(),
             num_running_tasks: num_running_tasks as u32,
-            pending_task_num: num_pending_tasks as u32,
+            num_pending_tasks: num_pending_tasks as u32,
         };
         match self
             .cluster
