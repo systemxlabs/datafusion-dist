@@ -64,4 +64,5 @@ pub struct NodeState {
     pub available_memory: u64,
     pub global_cpu_usage: f32,
     pub num_running_tasks: u32,
+    pub pending_task_num: u32,
 }
