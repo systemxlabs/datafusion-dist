@@ -3582,9 +3582,9 @@ dependencies = [
 
 [[package]]
 name = "sqllogictest-flightsql"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9c01d906e23b64562283e411247e52271e86321e5f51036fd8bdd32fe798d1c"
+checksum = "52703fb3975c6b3857988a3761b946754f6047f5cb62f7d979f44fa7b8831bd4"
 dependencies = [
  "arrow",
  "arrow-flight",
