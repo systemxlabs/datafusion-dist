@@ -111,7 +111,9 @@ fn parse_basic_auth(auth_header: &str) -> Option<(String, String)> {
     }
 
     let base64_part = &auth_header[BASIC_PREFIX.len()..];
-    let decoded = base64::engine::general_purpose::STANDARD.decode(base64_part).ok()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(base64_part)
+        .ok()?;
     let decoded_str = String::from_utf8(decoded).ok()?;
 
     let mut parts = decoded_str.splitn(2, ':');
