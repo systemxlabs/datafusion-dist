@@ -2,6 +2,7 @@ pub mod table;
 
 use std::{collections::HashMap, error::Error, pin::Pin, sync::Arc, time::Duration};
 
+use base64::Engine;
 use table::RunningJobsTable;
 
 use arrow_flight::{
@@ -100,6 +101,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Parse Basic Auth header and return (username, password) tuple
+/// Format: "Basic base64(username:password)"
+fn parse_basic_auth(auth_header: &str) -> Option<(String, String)> {
+    const BASIC_PREFIX: &str = "Basic ";
+
+    if !auth_header.starts_with(BASIC_PREFIX) {
+        return None;
+    }
+
+    let base64_part = &auth_header[BASIC_PREFIX.len()..];
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(base64_part)
+        .ok()?;
+    let decoded_str = String::from_utf8(decoded).ok()?;
+
+    let mut parts = decoded_str.splitn(2, ':');
+    let username = parts.next()?.to_string();
+    let password = parts.next()?.to_string();
+
+    Some((username, password))
+}
+
 fn build_dist_scheduler() -> DefaultScheduler {
     let assign_self = |plan: &Arc<dyn ExecutionPlan>| -> bool { is_plan_select_1(plan) };
     DefaultScheduler::new().with_assign_self(Some(Box::new(assign_self)))
@@ -170,9 +193,30 @@ impl FlightSqlService for TestFlightSqlService {
 
     async fn do_handshake(
         &self,
-        _request: Request<Streaming<HandshakeRequest>>,
+        request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<BoxedFlightStream<HandshakeResponse>>, Status> {
         info!("do_handshake");
+
+        // Extract and validate Basic Auth credentials from request metadata
+        let auth_header = request
+            .metadata()
+            .get("authorization")
+            .ok_or_else(|| Status::unauthenticated("Missing authorization header"))?
+            .to_str()
+            .map_err(|_| Status::unauthenticated("Invalid authorization header"))?;
+
+        // Parse Basic Auth header
+        let credentials = parse_basic_auth(auth_header)
+            .ok_or_else(|| Status::unauthenticated("Invalid Basic Auth format"))?;
+
+        // Validate credentials (hardcoded for integration tests)
+        // Expected: username="admin", password="admin123"
+        if credentials.0 != "admin" || credentials.1 != "admin123" {
+            return Err(Status::unauthenticated("Invalid username or password"));
+        }
+
+        info!("Authentication successful for user: {}", credentials.0);
+
         let token = Uuid::new_v4();
 
         let result = HandshakeResponse {
