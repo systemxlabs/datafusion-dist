@@ -77,18 +77,16 @@ NestedLoopJoinExec: join_type=Inner, filter=age@0 > age@1
 async fn hash_join_collect_left() -> Result<(), Box<dyn std::error::Error>> {
     let stage_plans = assert_planner(
         "select * from simple as t1 join simple as t2 on t1.name = t2.name",
-        r#"CoalesceBatchesExec: target_batch_size=8192
-  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
-    CoalescePartitionsExec
-      DataSourceExec: partitions=2, partition_sizes=[1, 1]
+        r#"HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
+  CoalescePartitionsExec
     DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
 "#,
         r#"===============Stage 0 (partitions=2)===============
-CoalesceBatchesExec: target_batch_size=8192
-  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
-    CoalescePartitionsExec
-      DataSourceExec: partitions=2, partition_sizes=[1, 1]
+HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
+  CoalescePartitionsExec
     DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
 "#,
     )
     .await;
@@ -126,14 +124,11 @@ async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
     println!("Physical plan: {plan_str}");
     assert_eq!(
         plan_str,
-        r#"CoalesceBatchesExec: target_batch_size=8192
-  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-        DataSourceExec: partitions=2, partition_sizes=[1, 1]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+        r#"HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
+  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
 "#,
     );
 
@@ -146,18 +141,15 @@ async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         actual,
         r#"===============Stage 0 (partitions=12)===============
-CoalesceBatchesExec: target_batch_size=8192
-  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
-    UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=2
-    UnresolvedExec: delegated_plan=CoalesceBatchesExec, delegated_stage=1
+HashJoinExec: mode=Partitioned, join_type=Inner, on=[(name@0, name@0)]
+  UnresolvedExec: delegated_plan=RepartitionExec, delegated_stage=2
+  UnresolvedExec: delegated_plan=RepartitionExec, delegated_stage=1
 ===============Stage 1 (partitions=12)===============
-CoalesceBatchesExec: target_batch_size=8192
-  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
 ===============Stage 2 (partitions=12)===============
-CoalesceBatchesExec: target_batch_size=8192
-  RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
-    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
+  DataSourceExec: partitions=2, partition_sizes=[1, 1]
 "#,
     );
 
@@ -174,20 +166,16 @@ async fn union_aggregate() -> Result<(), Box<dyn std::error::Error>> {
     let stage_plans = assert_planner(
         "select * from simple union select * from simple",
         r#"AggregateExec: mode=FinalPartitioned, gby=[name@0 as name, age@1 as age], aggr=[]
-  CoalesceBatchesExec: target_batch_size=8192
-    RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=12
-      RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=4
-        AggregateExec: mode=Partial, gby=[name@0 as name, age@1 as age], aggr=[]
-          UnionExec
-            DataSourceExec: partitions=2, partition_sizes=[1, 1]
-            DataSourceExec: partitions=2, partition_sizes=[1, 1]
+  RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=4
+    AggregateExec: mode=Partial, gby=[name@0 as name, age@1 as age], aggr=[]
+      UnionExec
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
+        DataSourceExec: partitions=2, partition_sizes=[1, 1]
 "#,
         r#"===============Stage 0 (partitions=12)===============
 AggregateExec: mode=FinalPartitioned, gby=[name@0 as name, age@1 as age], aggr=[]
-  CoalesceBatchesExec: target_batch_size=8192
-    RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=12
-      RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=4
-        UnresolvedExec: delegated_plan=AggregateExec, delegated_stage=1
+  RepartitionExec: partitioning=Hash([name@0, age@1], 12), input_partitions=4
+    UnresolvedExec: delegated_plan=AggregateExec, delegated_stage=1
 ===============Stage 1 (partitions=4)===============
 AggregateExec: mode=Partial, gby=[name@0 as name, age@1 as age], aggr=[]
   UnionExec
