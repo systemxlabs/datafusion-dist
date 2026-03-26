@@ -1148,6 +1148,7 @@ dependencies = [
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-physical-expr",
  "datafusion-physical-plan",
  "derive-with",
  "futures",
