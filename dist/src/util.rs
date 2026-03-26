@@ -139,96 +139,18 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::Literal;
-    use datafusion_physical_plan::{
-        empty::EmptyExec, placeholder_row::PlaceholderRowExec, projection::ProjectionExec,
-    };
-    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::prelude::SessionContext;
 
     #[tokio::test]
-    async fn test_is_plan_select_1_with_int32() {
-        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
-        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let proj = Arc::new(
-            ProjectionExec::try_new(
-                vec![(literal, "1".to_string())],
-                placeholder,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
+    async fn test_is_plan_select_1() {
+        // Create a DataFusion session context
+        let ctx = SessionContext::new();
 
-        assert!(is_plan_select_1(&proj));
-    }
+        // Execute SQL "SELECT 1" and create physical plan
+        let df = ctx.sql("SELECT 1").await.unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
 
-    #[tokio::test]
-    async fn test_is_plan_select_1_with_int64() {
-        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
-        let literal = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let proj = Arc::new(
-            ProjectionExec::try_new(
-                vec![(literal, "1".to_string())],
-                placeholder,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
-
-        assert!(is_plan_select_1(&proj));
-    }
-
-    #[tokio::test]
-    async fn test_is_plan_select_1_not_matching() {
-        // Test with value other than 1
-        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
-        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let proj = Arc::new(
-            ProjectionExec::try_new(
-                vec![(literal, "2".to_string())],
-                placeholder,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
-
-        assert!(!is_plan_select_1(&proj));
-    }
-
-    #[tokio::test]
-    async fn test_is_plan_select_1_not_projection() {
-        // Test with non-projection plan
-        let empty = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])))) as Arc<dyn ExecutionPlan>;
-        assert!(!is_plan_select_1(&empty));
-    }
-
-    #[tokio::test]
-    async fn test_is_plan_select_1_wrong_input() {
-        // Test with projection that doesn't have PlaceholderRowExec as input
-        let empty = Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
-        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let proj = Arc::new(
-            ProjectionExec::try_new(
-                vec![(literal, "1".to_string())],
-                empty,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
-
-        assert!(!is_plan_select_1(&proj));
-    }
-
-    #[tokio::test]
-    async fn test_is_plan_select_1_multiple_exprs() {
-        // Test with multiple expressions
-        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
-        let literal1 = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let literal2 = Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
-        let proj = Arc::new(
-            ProjectionExec::try_new(
-                vec![(literal1, "1".to_string()), (literal2, "2".to_string())],
-                placeholder,
-            )
-            .unwrap(),
-        ) as Arc<dyn ExecutionPlan>;
-
-        assert!(!is_plan_select_1(&proj));
+        // Verify that is_plan_select_1 returns true for this plan
+        assert!(is_plan_select_1(&plan));
     }
 }

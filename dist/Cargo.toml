@@ -27,3 +27,6 @@ sysinfo = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 
+[dev-dependencies]
+datafusion = { workspace = true }
+
