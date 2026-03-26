@@ -1,5 +1,13 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_plan::{
+    ExecutionPlan, placeholder_row::PlaceholderRowExec, projection::ProjectionExec,
+};
 use futures::{StreamExt, stream::BoxStream};
 use tokio::{
     runtime::Handle,
@@ -8,6 +16,28 @@ use tokio::{
 };
 
 use crate::{DistError, DistResult};
+
+/// Check if the physical plan is a simple `SELECT 1` query.
+/// This is used to identify queries that should be executed locally.
+pub fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() else {
+        return false;
+    };
+    if !proj.input().as_any().is::<PlaceholderRowExec>() {
+        return false;
+    }
+    if proj.expr().len() != 1 {
+        return false;
+    }
+    let expr = &proj.expr()[0];
+    let Some(literal) = expr.expr.as_any().downcast_ref::<Literal>() else {
+        return false;
+    };
+    matches!(
+        literal.value(),
+        ScalarValue::Int32(Some(1)) | ScalarValue::Int64(Some(1))
+    )
+}
 
 pub fn timestamp_ms() -> i64 {
     SystemTime::now()
@@ -100,5 +130,24 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         // Merge the streams together so whichever is ready first
         // produces the batch
         futures::stream::select(rx_stream, check_stream).boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::prelude::SessionContext;
+
+    #[tokio::test]
+    async fn test_is_plan_select_1() {
+        // Create a DataFusion session context
+        let ctx = SessionContext::new();
+
+        // Execute SQL "SELECT 1" and create physical plan
+        let df = ctx.sql("SELECT 1").await.unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+
+        // Verify that is_plan_select_1 returns true for this plan
+        assert!(is_plan_select_1(&plan));
     }
 }

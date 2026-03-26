@@ -35,7 +35,6 @@ pub type AssignSelfFn = Box<dyn Fn(&Arc<dyn ExecutionPlan>) -> bool + Send + Syn
 pub struct DefaultScheduler {
     assign_self: Option<AssignSelfFn>,
     memory_datasource_size_threshold: usize,
-    assign_one_stage_one_partition_job_to_self: bool,
 }
 
 impl DefaultScheduler {
@@ -43,7 +42,6 @@ impl DefaultScheduler {
         DefaultScheduler {
             assign_self: None,
             memory_datasource_size_threshold: 1024 * 1024,
-            assign_one_stage_one_partition_job_to_self: true,
         }
     }
 
@@ -97,20 +95,6 @@ impl DistScheduler for DefaultScheduler {
             return Err(DistError::schedule("No nodes available for scheduling"));
         }
 
-        if self.assign_one_stage_one_partition_job_to_self
-            && is_one_stage_one_partition_job(stage_plans)
-            && available_nodes.contains_key(local_node)
-        {
-            let distribution = stage_plans
-                .iter()
-                .flat_map(|(stage_id, _plan)| {
-                    let task_id = stage_id.task_id(0);
-                    vec![(task_id, local_node.clone())]
-                })
-                .collect();
-            return Ok(distribution);
-        }
-
         let mut assignments = HashMap::new();
 
         let mut stage_index = 0;
@@ -158,15 +142,6 @@ impl DistScheduler for DefaultScheduler {
         }
         Ok(assignments)
     }
-}
-
-pub fn is_one_stage_one_partition_job(
-    stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
-) -> bool {
-    stage_plans.len() == 1
-        && stage_plans
-            .values()
-            .all(|plan| plan.output_partitioning().partition_count() == 1)
 }
 
 pub fn contains_large_memory_datasource(plan: &Arc<dyn ExecutionPlan>, threshold: usize) -> bool {

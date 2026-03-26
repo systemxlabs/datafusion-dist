@@ -14,15 +14,12 @@ use arrow_flight::{
 };
 use datafusion::{
     arrow::ipc::writer::IpcWriteOptions,
-    physical_plan::{
-        ExecutionPlan, display::DisplayableExecutionPlan, placeholder_row::PlaceholderRowExec,
-        projection::ProjectionExec,
-    },
+    physical_plan::{ExecutionPlan, display::DisplayableExecutionPlan},
     prelude::SessionContext,
 };
 use datafusion_dist::{
     cluster::NodeId, config::DistConfig, planner::TaskId, runtime::DistRuntime,
-    scheduler::DefaultScheduler,
+    scheduler::DefaultScheduler, util::is_plan_select_1,
 };
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
 use datafusion_dist_integration_tests::data::build_session_context;
@@ -126,31 +123,6 @@ fn parse_basic_auth(auth_header: &str) -> Option<(String, String)> {
 fn build_dist_scheduler() -> DefaultScheduler {
     let assign_self = |plan: &Arc<dyn ExecutionPlan>| -> bool { is_plan_select_1(plan) };
     DefaultScheduler::new().with_assign_self(Some(Box::new(assign_self)))
-}
-
-fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() else {
-        return false;
-    };
-    if !proj.input().as_any().is::<PlaceholderRowExec>() {
-        return false;
-    }
-    if proj.expr().len() != 1 {
-        return false;
-    }
-    let expr = &proj.expr()[0];
-    let Some(literal) = expr
-        .expr
-        .as_any()
-        .downcast_ref::<datafusion::physical_expr::expressions::Literal>()
-    else {
-        return false;
-    };
-    matches!(
-        literal.value(),
-        datafusion::scalar::ScalarValue::Int32(Some(1))
-            | datafusion::scalar::ScalarValue::Int64(Some(1))
-    )
 }
 
 struct TestFlightSqlService {
