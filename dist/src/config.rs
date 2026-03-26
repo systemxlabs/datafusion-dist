@@ -13,8 +13,8 @@ impl DistConfig {
         Self {
             heartbeat_interval: Duration::from_secs(20),
             stage0_task_poll_timeout: Duration::from_secs(10),
-            job_ttl: Duration::from_secs(12 * 60 * 60),
-            job_ttl_check_interval: Duration::from_secs(10 * 60),
+            job_ttl: Duration::from_mins(30),
+            job_ttl_check_interval: Duration::from_mins(5),
         }
     }
 }

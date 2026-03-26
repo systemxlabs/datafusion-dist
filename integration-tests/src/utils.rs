@@ -32,6 +32,9 @@ pub async fn execute_flightsql_query(sql: &str) -> Result<Vec<RecordBatch>, Box<
     let channel = endpoint.connect().await?;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
 
+    // Perform handshake with credentials
+    flight_sql_client.handshake("admin", "admin123").await?;
+
     let flight_info = flight_sql_client.execute(sql.to_string(), None).await?;
 
     let mut batches = Vec::new();
@@ -53,6 +56,9 @@ pub async fn healthy_check_all_nodes() -> Result<(), Box<dyn Error>> {
         let endpoint = Endpoint::from_shared(format!("http://localhost:{port}"))?;
         let channel = endpoint.connect().await?;
         let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+
+        // Perform handshake with credentials
+        flight_sql_client.handshake("admin", "admin123").await?;
 
         // This sql will be executed on connected node
         let flight_info = flight_sql_client

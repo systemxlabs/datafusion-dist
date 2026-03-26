@@ -13,6 +13,7 @@ datafusion-dist = { workspace = true }
 async-trait = { workspace = true }
 arrow = { workspace = true }
 arrow-flight = { workspace = true }
+backon = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-physical-expr = { workspace = true }

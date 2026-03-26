@@ -1,11 +1,12 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use backon::{ExponentialBuilder, Retryable};
 use log::{debug, error};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
-    DistResult, JobId,
+    DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId},
     config::DistConfig,
     network::{DistNetwork, StageInfo},
@@ -18,6 +19,29 @@ pub enum Event {
     CheckJobCompleted(JobId),
     CleanupJob(JobId),
     ReceivedStage0Tasks(Vec<StageId>),
+}
+
+const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
+const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
+const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
+
+fn job_check_retry_strategy() -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_max_delay(CHECK_JOB_RETRY_MAX_DELAY)
+        .with_max_times(CHECK_JOB_RETRY_MAX_TIMES)
+        .with_jitter()
+}
+
+pub async fn send_event_with_timeout(sender: &Sender<Event>, event: Event) -> DistResult<()> {
+    tokio::time::timeout(EVENT_SEND_TIMEOUT, sender.send(event))
+        .await
+        .map_err(|_| {
+            DistError::internal(format!(
+                "Timed out sending event after {}s",
+                EVENT_SEND_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|e| DistError::internal(format!("Failed to send event: {e}")))
 }
 
 pub fn start_event_handler(mut handler: EventHandler) {
@@ -55,18 +79,23 @@ impl EventHandler {
     }
 
     async fn handle_check_job_completed(&mut self, job_id: JobId) {
-        match check_job_completed(
-            &self.cluster,
-            &self.network,
-            &self.local_stages,
-            job_id.clone(),
-        )
+        match (|| async {
+            check_job_completed(
+                &self.cluster,
+                &self.network,
+                &self.local_stages,
+                job_id.clone(),
+            )
+            .await
+        })
+        .retry(job_check_retry_strategy())
         .await
         {
             Ok(Some(true)) => {
                 debug!("Job {job_id} completed, remove it from cluster");
-
-                if let Err(e) = self.sender.send(Event::CleanupJob(job_id.clone())).await {
+                if let Err(e) =
+                    send_event_with_timeout(&self.sender, Event::CleanupJob(job_id.clone())).await
+                {
                     error!("Failed to send cleanup job event for job {job_id}: {e}");
                 }
             }
@@ -114,9 +143,9 @@ impl EventHandler {
             }
 
             if let Some(stage_id) = timeout_stage0_id
-                && let Err(e) = sender
-                    .send(Event::CleanupJob(stage_id.job_id.clone()))
-                    .await
+                && let Err(e) =
+                    send_event_with_timeout(&sender, Event::CleanupJob(stage_id.job_id.clone()))
+                        .await
             {
                 error!(
                     "Failed to send CleanupJob event for job {}: {e}",

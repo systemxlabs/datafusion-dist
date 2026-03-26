@@ -25,7 +25,10 @@ use crate::{
     DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
-    event::{Event, EventHandler, cleanup_job, local_stage_stats, start_event_handler},
+    event::{
+        Event, EventHandler, cleanup_job, local_stage_stats, send_event_with_timeout,
+        start_event_handler,
+    },
     executor::{DefaultExecutor, DistExecutor, logging_executor_metrics},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
@@ -313,6 +316,12 @@ impl DistRuntime {
     }
 
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        if matches!(*self.status.lock(), NodeStatus::Terminating) {
+            return Err(DistError::internal(
+                "Local node is in Terminating status, cannot receive tasks",
+            ));
+        }
+
         debug!(
             "Received job {} tasks: [{}] and plans of stages: [{}]",
             scheduled_tasks.job_id()?,
@@ -344,12 +353,8 @@ impl DistRuntime {
             .cloned()
             .collect::<Vec<StageId>>();
         if !stage0_ids.is_empty() {
-            self.event_sender
-                .send(Event::ReceivedStage0Tasks(stage0_ids))
-                .await
-                .map_err(|e| {
-                    DistError::internal(format!("Failed to send ReceivedStage0Tasks event: {e}"))
-                })?;
+            send_event_with_timeout(&self.event_sender, Event::ReceivedStage0Tasks(stage0_ids))
+                .await?;
         }
 
         Ok(())
@@ -503,6 +508,22 @@ impl StageState {
             .iter()
             .map(|task_set| task_set.running_partitions.len())
             .sum()
+    }
+
+    pub fn num_pending_tasks(&self) -> usize {
+        let executed_partitions: HashSet<usize> = self
+            .task_sets
+            .iter()
+            .flat_map(|task_set| {
+                let mut executed = task_set.running_partitions.clone();
+                executed.extend(task_set.dropped_partitions.keys());
+                executed
+            })
+            .collect();
+
+        self.assigned_partitions
+            .difference(&executed_partitions)
+            .count()
     }
 
     pub fn get_plan(&mut self, partition: usize) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
@@ -685,9 +706,11 @@ impl Drop for TaskStream {
             }
 
             if send_event
-                && let Err(e) = sender
-                    .send(Event::CheckJobCompleted(task_id.job_id.clone()))
-                    .await
+                && let Err(e) = send_event_with_timeout(
+                    &sender,
+                    Event::CheckJobCompleted(task_id.job_id.clone()),
+                )
+                .await
             {
                 error!(
                     "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"

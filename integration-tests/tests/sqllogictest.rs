@@ -8,7 +8,7 @@ async fn sqllogictest() -> Result<(), Box<dyn std::error::Error>> {
     setup_containers().await;
 
     let mut tester = sqllogictest::Runner::new(|| async {
-        FlightSqlDB::new_from_endpoint("dist", "http://localhost:50061").await
+        FlightSqlDB::new_from_endpoint("dist", "http://localhost:50061", "admin", "admin123").await
     });
     tester.with_column_validator(sqllogictest::strict_column_validator);
 
