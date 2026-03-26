@@ -1,5 +1,12 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
+use datafusion_physical_plan::{
+    placeholder_row::PlaceholderRowExec,
+    projection::ProjectionExec,
+    ExecutionPlan,
+};
+use datafusion_common::ScalarValue;
+use datafusion_physical_expr::expressions::Literal;
 use futures::{StreamExt, stream::BoxStream};
 use tokio::{
     runtime::Handle,
@@ -8,6 +15,32 @@ use tokio::{
 };
 
 use crate::{DistError, DistResult};
+
+/// Check if the physical plan is a simple `SELECT 1` query.
+/// This is used to identify queries that should be executed locally.
+pub fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() else {
+        return false;
+    };
+    if !proj.input().as_any().is::<PlaceholderRowExec>() {
+        return false;
+    }
+    if proj.expr().len() != 1 {
+        return false;
+    }
+    let expr = &proj.expr()[0];
+    let Some(literal) = expr
+        .expr
+        .as_any()
+        .downcast_ref::<Literal>()
+    else {
+        return false;
+    };
+    matches!(
+        literal.value(),
+        ScalarValue::Int32(Some(1)) | ScalarValue::Int64(Some(1))
+    )
+}
 
 pub fn timestamp_ms() -> i64 {
     SystemTime::now()
@@ -100,5 +133,102 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         // Merge the streams together so whichever is ready first
         // produces the batch
         futures::stream::select(rx_stream, check_stream).boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_plan::{
+        empty::EmptyExec, placeholder_row::PlaceholderRowExec, projection::ProjectionExec,
+    };
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_with_int32() {
+        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let proj = Arc::new(
+            ProjectionExec::try_new(
+                vec![(literal, "1".to_string())],
+                placeholder,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        assert!(is_plan_select_1(&proj));
+    }
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_with_int64() {
+        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        let literal = Arc::new(Literal::new(ScalarValue::Int64(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let proj = Arc::new(
+            ProjectionExec::try_new(
+                vec![(literal, "1".to_string())],
+                placeholder,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        assert!(is_plan_select_1(&proj));
+    }
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_not_matching() {
+        // Test with value other than 1
+        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let proj = Arc::new(
+            ProjectionExec::try_new(
+                vec![(literal, "2".to_string())],
+                placeholder,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        assert!(!is_plan_select_1(&proj));
+    }
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_not_projection() {
+        // Test with non-projection plan
+        let empty = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])))) as Arc<dyn ExecutionPlan>;
+        assert!(!is_plan_select_1(&empty));
+    }
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_wrong_input() {
+        // Test with projection that doesn't have PlaceholderRowExec as input
+        let empty = Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let proj = Arc::new(
+            ProjectionExec::try_new(
+                vec![(literal, "1".to_string())],
+                empty,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        assert!(!is_plan_select_1(&proj));
+    }
+
+    #[tokio::test]
+    async fn test_is_plan_select_1_multiple_exprs() {
+        // Test with multiple expressions
+        let placeholder = Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+        let literal1 = Arc::new(Literal::new(ScalarValue::Int32(Some(1)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let literal2 = Arc::new(Literal::new(ScalarValue::Int32(Some(2)))) as Arc<dyn datafusion_physical_plan::PhysicalExpr>;
+        let proj = Arc::new(
+            ProjectionExec::try_new(
+                vec![(literal1, "1".to_string()), (literal2, "2".to_string())],
+                placeholder,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        assert!(!is_plan_select_1(&proj));
     }
 }

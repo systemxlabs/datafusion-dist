@@ -14,6 +14,7 @@ arrow = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 derive-with = { workspace = true }
 futures = { workspace = true }
@@ -21,7 +22,7 @@ itertools = { workspace = true }
 local-ip-address = { workspace = true }
 log = { workspace = true }
 parking_lot = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 sysinfo = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
