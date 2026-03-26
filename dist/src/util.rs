@@ -1,12 +1,13 @@
-use std::{sync::Arc, time::{SystemTime, UNIX_EPOCH}};
-
-use datafusion_physical_plan::{
-    placeholder_row::PlaceholderRowExec,
-    projection::ProjectionExec,
-    ExecutionPlan,
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
+
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_plan::{
+    ExecutionPlan, placeholder_row::PlaceholderRowExec, projection::ProjectionExec,
+};
 use futures::{StreamExt, stream::BoxStream};
 use tokio::{
     runtime::Handle,
@@ -29,11 +30,7 @@ pub fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
         return false;
     }
     let expr = &proj.expr()[0];
-    let Some(literal) = expr
-        .expr
-        .as_any()
-        .downcast_ref::<Literal>()
-    else {
+    let Some(literal) = expr.expr.as_any().downcast_ref::<Literal>() else {
         return false;
     };
     matches!(
