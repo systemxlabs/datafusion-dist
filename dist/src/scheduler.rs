@@ -43,7 +43,7 @@ impl DefaultScheduler {
         DefaultScheduler {
             assign_self: None,
             memory_datasource_size_threshold: 1024 * 1024,
-            assign_one_stage_one_partition_job_to_self: true,
+            assign_one_stage_one_partition_job_to_self: false,
         }
     }
 
@@ -54,6 +54,11 @@ impl DefaultScheduler {
 
     pub fn with_memory_datasource_size_threshold(mut self, threshold: usize) -> Self {
         self.memory_datasource_size_threshold = threshold;
+        self
+    }
+
+    pub fn with_assign_one_stage_one_partition_job_to_self(mut self, to_self: bool) -> Self {
+        self.assign_one_stage_one_partition_job_to_self = to_self;
         self
     }
 }
