@@ -80,6 +80,15 @@ impl DockerCompose {
     }
 
     pub fn up(&self) {
+        // Step 1: Stop and remove old containers
+        self.down();
+
+        // Step 2: Remove old image (ignore error if image doesn't exist)
+        let mut rmi_cmd = Command::new("docker");
+        rmi_cmd.args(vec!["rmi", "-f", "datafusion-dist-integration-tests-app"]);
+        let _ = rmi_cmd.status(); // Ignore result
+
+        // Step 3: Start containers with build
         let mut cmd = Command::new("docker");
         cmd.current_dir(&self.docker_compose_dir);
 
@@ -92,6 +101,7 @@ impl DockerCompose {
             "up",
             "-d",
             "--wait",
+            "--build",
             "--timeout",
             "1200000",
         ]);
