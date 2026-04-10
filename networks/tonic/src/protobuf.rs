@@ -109,6 +109,9 @@ pub struct ProxyExecNode {
     pub schema: ::core::option::Option<::datafusion_proto::protobuf::Schema>,
     #[prost(message, optional, tag = "5")]
     pub partitioning: ::core::option::Option<::datafusion_proto::protobuf::Partitioning>,
+    #[prost(message, repeated, tag = "6")]
+    pub output_ordering:
+        ::prost::alloc::vec::Vec<::datafusion_proto::protobuf::PhysicalSortExprNodeCollection>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TaskDistribution {

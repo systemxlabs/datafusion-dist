@@ -83,6 +83,7 @@ message ProxyExecNode {
   TaskDistribution delegated_task_distribution = 3;
   datafusion_common.Schema schema = 4;
   datafusion.Partitioning partitioning = 5;
+  repeated datafusion.PhysicalSortExprNodeCollection output_ordering = 6;
 }
 
 message TaskDistribution {

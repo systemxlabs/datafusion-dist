@@ -217,3 +217,34 @@ SortExec: expr=[age@1 ASC NULLS LAST], preserve_partitioning=[true]
     assert_stage_distributed_into_nodes(1, &distribution, 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn window_rank_with_partition_ordering() -> Result<(), Box<dyn std::error::Error>> {
+    let stage_plans = assert_planner(
+        r#"select * from (select *,rank() over(partition by id order by view_updated desc nulls last) rk from "public"."file_grid_original_44691_20260313152925290"  )t1 where rk = 1;"#,
+        r#"ProjectionExec: expr=[id@0 as id, file_name@1 as file_name, view_updated@2 as view_updated, rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
+  FilterExec: rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 = 1
+    BoundedWindowAggExec: wdw=[rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[id@0 ASC NULLS LAST, view_updated@2 DESC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=2
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+        r#"===============Stage 0 (partitions=12)===============
+ProjectionExec: expr=[id@0 as id, file_name@1 as file_name, view_updated@2 as view_updated, rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rk]
+  FilterExec: rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 = 1
+    BoundedWindowAggExec: wdw=[rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [public.file_grid_original_44691_20260313152925290.id] ORDER BY [public.file_grid_original_44691_20260313152925290.view_updated DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      UnresolvedExec: delegated_plan=SortExec, delegated_stage=1
+===============Stage 1 (partitions=12)===============
+SortExec: expr=[id@0 ASC NULLS LAST, view_updated@2 DESC NULLS LAST], preserve_partitioning=[true]
+  RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=2
+    DataSourceExec: partitions=2, partition_sizes=[1, 1]
+"#,
+    )
+    .await;
+
+    let (local_node, nodes) = mock_alive_nodes();
+    let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
+    assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
+    assert_stage_distributed_into_one_node(1, &distribution);
+    Ok(())
+}

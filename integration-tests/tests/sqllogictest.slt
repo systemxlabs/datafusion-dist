@@ -61,3 +61,11 @@ select * from simple order by age
 ----
 Alice 25
 Bob 30
+
+# Window rank with nulls last in subquery
+query ITII rowsort
+select * from (select *,rank() over(partition by id order by view_updated desc nulls last) rk from "public"."file_grid_original_44691_20260313152925290"  )t1 where rk = 1;
+----
+1 latest 200 1
+2 only_null NULL 1
+3 latest3 50 1

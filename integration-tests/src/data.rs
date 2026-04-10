@@ -25,6 +25,7 @@ pub fn build_session_context() -> SessionContext {
 
 pub fn register_tables(ctx: &SessionContext) {
     register_simple_table(ctx);
+    register_file_grid_original_44691_table(ctx);
 }
 
 pub fn register_udfs(ctx: &SessionContext) {
@@ -53,6 +54,41 @@ pub fn register_simple_table(ctx: &SessionContext) {
 
     ctx.register_table("simple", Arc::new(table))
         .expect("Failed to register simple table");
+}
+
+pub fn register_file_grid_original_44691_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("file_name", DataType::Utf8, false),
+        Field::new("view_updated", DataType::Int64, true),
+    ]));
+
+    let ids = Int32Array::from(vec![1, 1, 1]);
+    let file_names = StringArray::from(vec!["older", "latest", "missing"]);
+    let view_updated = Int64Array::from(vec![Some(100), Some(200), None]);
+    let batch0 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(file_names), Arc::new(view_updated)],
+    )
+    .expect("Failed to create file grid record batch 0");
+
+    let ids = Int32Array::from(vec![2, 3, 3]);
+    let file_names = StringArray::from(vec!["only_null", "latest3", "older3"]);
+    let view_updated = Int64Array::from(vec![None, Some(50), Some(40)]);
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(file_names), Arc::new(view_updated)],
+    )
+    .expect("Failed to create file grid record batch 1");
+
+    let table = MemTable::try_new(schema, vec![vec![batch0], vec![batch1]])
+        .expect("Failed to create file grid MemTable");
+
+    ctx.register_table(
+        "file_grid_original_44691_20260313152925290",
+        Arc::new(table),
+    )
+    .expect("Failed to register file grid table");
 }
 
 pub fn register_panic_udf(ctx: &SessionContext) {

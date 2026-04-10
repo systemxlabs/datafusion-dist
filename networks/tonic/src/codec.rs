@@ -11,7 +11,11 @@ use datafusion_physical_plan::{
 };
 use datafusion_proto::{
     convert_required,
-    physical_plan::{PhysicalExtensionCodec, from_proto::parse_protobuf_partitioning},
+    physical_plan::{
+        PhysicalExtensionCodec,
+        from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
+        to_proto::serialize_physical_sort_exprs,
+    },
 };
 use datafusion_proto::{physical_plan::to_proto::serialize_partitioning, protobuf::proto_error};
 use prost::Message;
@@ -53,6 +57,23 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
                 &exec.delegated_plan_properties.partitioning,
                 self.app_extension_codec.as_ref(),
             )?;
+            let proto_output_ordering = exec
+                .delegated_plan_properties
+                .eq_properties
+                .oeq_class()
+                .iter()
+                .cloned()
+                .map(|ordering| {
+                    Ok::<_, DataFusionError>(
+                        datafusion_proto::protobuf::PhysicalSortExprNodeCollection {
+                            physical_sort_expr_nodes: serialize_physical_sort_exprs(
+                                ordering,
+                                self.app_extension_codec.as_ref(),
+                            )?,
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let proto_task_distribution =
                 serialize_task_distribution(&exec.delegated_task_distribution);
 
@@ -63,6 +84,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
                     delegated_task_distribution: Some(proto_task_distribution),
                     schema: Some(exec.schema().as_ref().try_into()?),
                     partitioning: Some(proto_partitioning),
+                    output_ordering: proto_output_ordering,
                 })),
             };
             proto.encode(buf).map_err(|e| {
@@ -130,10 +152,25 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                     self.app_extension_codec.as_ref(),
                 )?
                 .expect("partition is none");
+                let output_ordering = proto
+                    .output_ordering
+                    .iter()
+                    .map(|ordering| {
+                        parse_physical_sort_exprs(
+                            &ordering.physical_sort_expr_nodes,
+                            ctx,
+                            &delegated_plan_schema,
+                            self.app_extension_codec.as_ref(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 // Todo EmissionType / Boundedness protobuf
                 let delegated_plan_properties = PlanProperties::new(
-                    EquivalenceProperties::new(delegated_plan_schema),
+                    EquivalenceProperties::new_with_orderings(
+                        delegated_plan_schema,
+                        output_ordering,
+                    ),
                     partitioning,
                     EmissionType::Incremental,
                     Boundedness::Bounded,
