@@ -95,10 +95,18 @@ impl DistScheduler for DefaultScheduler {
             return Err(DistError::schedule("No nodes available for scheduling"));
         }
 
-        let mut assignments = HashMap::new();
+        // Maintain virtual loads across stages within a single schedule call
+        let mut virtual_loads: HashMap<NodeId, u32> = available_nodes
+            .iter()
+            .map(|(id, state)| {
+                (
+                    id.clone(),
+                    state.num_running_tasks + state.num_pending_tasks,
+                )
+            })
+            .collect();
 
-        let mut stage_index = 0;
-        let mut task_index = 0;
+        let mut assignments = HashMap::new();
 
         for (stage_id, plan) in stage_plans.iter() {
             if let Some(assign_self) = &self.assign_self
@@ -122,22 +130,13 @@ impl DistScheduler for DefaultScheduler {
             }
 
             if is_plan_fully_pipelined(plan) {
-                let assignment = assign_stage_tasks_to_all_nodes(
-                    stage_id.clone(),
-                    plan,
-                    &available_nodes,
-                    &mut task_index,
-                );
+                let assignment =
+                    assign_stage_tasks_to_all_nodes(stage_id.clone(), plan, &mut virtual_loads);
                 assignments.extend(assignment);
             } else {
-                let assignment = assign_stage_all_tasks_to_node(
-                    stage_id.clone(),
-                    plan,
-                    &available_nodes,
-                    &mut stage_index,
-                );
+                let assignment =
+                    assign_stage_all_tasks_to_node(stage_id.clone(), plan, &mut virtual_loads);
                 assignments.extend(assignment);
-                stage_index += 1;
             }
         }
         Ok(assignments)
@@ -216,23 +215,25 @@ fn assign_stage_tasks_to_self(
 fn assign_stage_tasks_to_all_nodes(
     stage_id: StageId,
     plan: &Arc<dyn ExecutionPlan>,
-    node_states: &HashMap<NodeId, NodeState>,
-    task_index: &mut usize,
+    virtual_loads: &mut HashMap<NodeId, u32>,
 ) -> HashMap<TaskId, NodeId> {
     let mut assignments = HashMap::new();
     let partition_count = plan.output_partitioning().partition_count();
 
     for partition in 0..partition_count {
         let task_id = stage_id.task_id(partition as u32);
-        assignments.insert(
-            task_id,
-            node_states
-                .keys()
-                .nth(*task_index % node_states.len())
-                .expect("index should be within bounds")
-                .clone(),
-        );
-        *task_index += 1;
+
+        // Find node with min load and tie-break by NodeId
+        let node_id = virtual_loads
+            .iter()
+            .min_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+            .map(|(id, _)| id.clone())
+            .expect("available nodes should not be empty");
+
+        assignments.insert(task_id, node_id.clone());
+
+        // Increment virtual load
+        *virtual_loads.get_mut(&node_id).unwrap() += 1;
     }
 
     assignments
@@ -241,13 +242,14 @@ fn assign_stage_tasks_to_all_nodes(
 fn assign_stage_all_tasks_to_node(
     stage_id: StageId,
     plan: &Arc<dyn ExecutionPlan>,
-    node_states: &HashMap<NodeId, NodeState>,
-    stage_index: &mut usize,
+    virtual_loads: &mut HashMap<NodeId, u32>,
 ) -> HashMap<TaskId, NodeId> {
-    let node_id = node_states
-        .keys()
-        .nth(*stage_index % node_states.len())
-        .expect("index should be within bounds");
+    // Find node with min load and tie-break by NodeId
+    let node_id = virtual_loads
+        .iter()
+        .min_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+        .map(|(id, _)| id.clone())
+        .expect("available nodes should not be empty");
 
     let mut assignments = HashMap::new();
     let partition_count = plan.output_partitioning().partition_count();
@@ -257,7 +259,8 @@ fn assign_stage_all_tasks_to_node(
         assignments.insert(task_id, node_id.clone());
     }
 
-    *stage_index += 1;
+    // Increment virtual load for the entire stage (considering all partitions as load)
+    *virtual_loads.get_mut(&node_id).unwrap() += partition_count as u32;
 
     assignments
 }
