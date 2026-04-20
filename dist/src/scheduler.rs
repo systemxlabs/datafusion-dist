@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     sync::Arc,
@@ -175,12 +175,6 @@ pub fn contains_large_memory_datasource(plan: &Arc<dyn ExecutionPlan>, threshold
 }
 
 pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>()
-        && hash_join.partition_mode() == &PartitionMode::Partitioned
-    {
-        return true;
-    }
-
     let mut fully_pipelined = true;
     plan.apply(|node| {
         let any = node.as_any();
@@ -225,13 +219,20 @@ fn assign_stage_tasks_to_all_nodes(
 ) -> HashMap<TaskId, NodeId> {
     let mut assignments = HashMap::new();
     let partition_count = plan.output_partitioning().partition_count();
-    let nodes: Vec<NodeId> = virtual_loads.keys().sorted().cloned().collect();
 
     for partition in 0..partition_count {
         let task_id = stage_id.task_id(partition as u32);
-        let node_id = nodes[partition % nodes.len()].clone();
+
+        // Find node with min load and tie-break by NodeId
+        let node_id = virtual_loads
+            .iter()
+            .min_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+            .map(|(id, _)| id.clone())
+            .expect("available nodes should not be empty");
 
         assignments.insert(task_id, node_id.clone());
+
+        // Increment virtual load
         *virtual_loads.get_mut(&node_id).unwrap() += 1;
     }
 
@@ -312,4 +313,3 @@ impl Display for DisplayableTaskDistribution<'_> {
         write!(f, "{}", node_dist.join(", "))
     }
 }
-
