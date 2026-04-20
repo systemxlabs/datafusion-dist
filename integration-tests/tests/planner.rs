@@ -3,8 +3,7 @@ use datafusion_dist::planner::{DefaultPlanner, DisplayableStagePlans, DistPlanne
 use datafusion_dist_integration_tests::{
     data::build_session_context,
     utils::{
-        assert_planner, assert_stage_distributed_into_nodes,
-        assert_stage_distributed_into_one_node, mock_alive_nodes, schedule_tasks,
+        assert_planner, assert_stage_distributed_into_nodes_v2, mock_alive_nodes, schedule_tasks,
     },
 };
 use uuid::Uuid;
@@ -22,7 +21,7 @@ DataSourceExec: partitions=2, partition_sizes=[1, 1]
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_nodes(0, &distribution, 2);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[1, 1, 0]);
     Ok(())
 }
 #[tokio::test]
@@ -45,7 +44,7 @@ CrossJoinExec
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[2, 0, 0]);
     Ok(())
 }
 
@@ -69,7 +68,7 @@ NestedLoopJoinExec: join_type=Inner, filter=age@0 > age@1
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[2, 0, 0]);
     Ok(())
 }
 
@@ -93,7 +92,7 @@ HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[2, 0, 0]);
     Ok(())
 }
 
@@ -155,9 +154,9 @@ RepartitionExec: partitioning=Hash([name@0], 12), input_partitions=2
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
-    assert_stage_distributed_into_one_node(1, &distribution);
-    assert_stage_distributed_into_one_node(2, &distribution);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[4, 4, 4]);
+    assert_stage_distributed_into_nodes_v2(1, &nodes, &distribution, &[12, 0, 0]);
+    assert_stage_distributed_into_nodes_v2(2, &nodes, &distribution, &[0, 12, 0]);
     Ok(())
 }
 
@@ -187,8 +186,8 @@ AggregateExec: mode=Partial, gby=[name@0 as name, age@1 as age], aggr=[]
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
-    assert_stage_distributed_into_nodes(1, &distribution, nodes.len());
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[12, 0, 0]);
+    assert_stage_distributed_into_nodes_v2(1, &nodes, &distribution, &[0, 2, 2]);
 
     Ok(())
 }
@@ -213,8 +212,8 @@ SortExec: expr=[age@1 ASC NULLS LAST], preserve_partitioning=[true]
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_one_node(0, &distribution);
-    assert_stage_distributed_into_nodes(1, &distribution, 2);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[1, 0, 0]);
+    assert_stage_distributed_into_nodes_v2(1, &nodes, &distribution, &[0, 1, 1]);
     Ok(())
 }
 
@@ -244,7 +243,7 @@ SortExec: expr=[id@0 ASC NULLS LAST, view_updated@2 DESC NULLS LAST], preserve_p
 
     let (local_node, nodes) = mock_alive_nodes();
     let distribution = schedule_tasks(&local_node, &nodes, &stage_plans).await?;
-    assert_stage_distributed_into_nodes(0, &distribution, nodes.len());
-    assert_stage_distributed_into_one_node(1, &distribution);
+    assert_stage_distributed_into_nodes_v2(0, &nodes, &distribution, &[4, 4, 4]);
+    assert_stage_distributed_into_nodes_v2(1, &nodes, &distribution, &[12, 0, 0]);
     Ok(())
 }

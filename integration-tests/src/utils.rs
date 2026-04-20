@@ -16,6 +16,7 @@ use datafusion_dist::{
     scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
 };
 use futures::TryStreamExt;
+use itertools::Itertools;
 use tonic::transport::Endpoint;
 
 use crate::data::build_session_context;
@@ -170,4 +171,36 @@ pub fn assert_stage_distributed_into_nodes(
         .map(|(_, node_id)| node_id)
         .collect();
     assert_eq!(distinct_nodes.len(), target_num_nodes);
+}
+
+pub fn assert_stage_distributed_into_nodes_v2(
+    stage: u32,
+    nodes: &HashMap<NodeId, NodeState>,
+    distribution: &HashMap<TaskId, NodeId>,
+    expected_node_distribution_count: &[usize],
+) {
+    let mut node_distribution: HashMap<NodeId, Vec<TaskId>> = nodes
+        .keys()
+        .map(|node_id| (node_id.clone(), Vec::new()))
+        .collect::<HashMap<_, _>>();
+    for (task_id, node_id) in distribution {
+        if task_id.stage != stage {
+            continue;
+        }
+        node_distribution
+            .entry(node_id.clone())
+            .or_default()
+            .push(task_id.clone());
+    }
+
+    let node_distribution_count = node_distribution
+        .iter()
+        .sorted_by_key(|entry| entry.0)
+        .map(|entry| entry.1.len())
+        .collect::<Vec<_>>();
+    if expected_node_distribution_count != node_distribution_count {
+        panic!(
+            "stage {stage} node distribution count mismatch, expected: {expected_node_distribution_count:?}, actual: {node_distribution_count:?}"
+        );
+    }
 }

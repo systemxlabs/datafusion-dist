@@ -16,6 +16,7 @@ arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
+itertools = { workspace = true }
 sqllogictest = { workspace = true }
 sqllogictest-flightsql = { workspace = true }
 tokio = { workspace = true, features = ["full"]}

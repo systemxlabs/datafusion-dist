@@ -1197,6 +1197,7 @@ dependencies = [
  "datafusion-dist-cluster-postgres",
  "datafusion-dist-network-tonic",
  "futures",
+ "itertools 0.14.0",
  "sqllogictest",
  "sqllogictest-flightsql",
  "tokio",

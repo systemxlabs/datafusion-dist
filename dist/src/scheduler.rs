@@ -108,7 +108,7 @@ impl DistScheduler for DefaultScheduler {
 
         let mut assignments = HashMap::new();
 
-        for (stage_id, plan) in stage_plans.iter() {
+        for (stage_id, plan) in stage_plans.iter().sorted_by_key(|entry| entry.0) {
             if let Some(assign_self) = &self.assign_self
                 && assign_self(plan)
             {
