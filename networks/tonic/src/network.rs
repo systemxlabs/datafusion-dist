@@ -38,7 +38,7 @@ use crate::{
 
 const DIST_RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DIST_RPC_TIMEOUT: Duration = Duration::from_secs(30);
-const RPC_POOL_MAX_SIZE: u32 = 4;
+const RPC_POOL_MAX_SIZE: u32 = 1024;
 const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const RPC_RETRY_MAX_TIMES: usize = 3;
 
@@ -133,6 +133,10 @@ impl DistTonicNetwork {
         let manager = TonicChannelManager::new_single(endpoint);
         let pool = Pool::builder()
             .max_size(RPC_POOL_MAX_SIZE)
+            .min_idle(16)
+            .max_lifetime(Some(Duration::from_secs(600)))
+            .idle_timeout(Some(Duration::from_secs(120)))
+            .test_on_check_out(true)
             .build(manager)
             .await
             .map_err(|e| DistError::network(Box::new(e)))?;
