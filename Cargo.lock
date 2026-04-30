@@ -517,6 +517,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bb8-tonic"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9f800a9d7c9e85dd9421474bd83c69763696539b6ee40b783fd33f38f2368cb"
+dependencies = [
+ "bb8",
+ "bytes",
+ "futures",
+ "http",
+ "tonic",
+ "tower-service",
+]
+
+[[package]]
 name = "bigdecimal"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1236,6 +1250,8 @@ dependencies = [
  "arrow-flight",
  "async-trait",
  "backon",
+ "bb8",
+ "bb8-tonic",
  "datafusion-common",
  "datafusion-dist",
  "datafusion-execution",

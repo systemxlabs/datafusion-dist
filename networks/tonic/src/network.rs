@@ -8,6 +8,8 @@ use arrow::datatypes::Schema;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use backon::{ExponentialBuilder, Retryable};
+use bb8::Pool;
+use bb8_tonic::TonicChannelManager;
 use datafusion_common::DataFusionError;
 use datafusion_dist::{
     DistError, DistResult, JobId,
@@ -22,7 +24,7 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, lock::Mutex};
 use tonic::transport::{Channel, Endpoint};
 
 use crate::{
@@ -36,6 +38,7 @@ use crate::{
 
 const DIST_RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DIST_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const RPC_POOL_MAX_SIZE: u32 = 4;
 const RPC_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const RPC_RETRY_MAX_TIMES: usize = 3;
 
@@ -50,6 +53,7 @@ fn retry_strategy() -> ExponentialBuilder {
 pub struct DistTonicNetwork {
     pub port: u16,
     pub composed_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    pools: Mutex<HashMap<NodeId, Arc<Pool<TonicChannelManager>>>>,
 }
 
 impl DistTonicNetwork {
@@ -63,6 +67,7 @@ impl DistTonicNetwork {
         Self {
             port,
             composed_extension_codec,
+            pools: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -107,6 +112,56 @@ impl DistTonicNetwork {
             plan: plan_buf,
         })
     }
+
+    async fn get_or_create_pool(
+        &self,
+        node_id: &NodeId,
+    ) -> DistResult<Arc<Pool<TonicChannelManager>>> {
+        {
+            let pools = self.pools.lock().await;
+            if let Some(pool) = pools.get(node_id) {
+                return Ok(pool.clone());
+            }
+        }
+
+        let addr = format!("http://{}:{}", node_id.host, node_id.port);
+        let endpoint = Endpoint::from_shared(addr)
+            .map_err(|e| DistError::network(Box::new(e)))?
+            .connect_timeout(DIST_RPC_CONNECT_TIMEOUT)
+            .timeout(DIST_RPC_TIMEOUT);
+
+        let manager = TonicChannelManager::new_single(endpoint);
+        let pool = Pool::builder()
+            .max_size(RPC_POOL_MAX_SIZE)
+            .build(manager)
+            .await
+            .map_err(|e| DistError::network(Box::new(e)))?;
+
+        let pool = Arc::new(pool);
+
+        let mut pools = self.pools.lock().await;
+        if let Some(existing) = pools.get(node_id) {
+            return Ok(existing.clone());
+        }
+        pools.insert(node_id.clone(), pool.clone());
+
+        Ok(pool)
+    }
+
+    async fn build_tonic_client(
+        &self,
+        node_id: &NodeId,
+    ) -> DistResult<DistTonicServiceClient<Channel>> {
+        let pool = self.get_or_create_pool(node_id).await?;
+        let conn = pool
+            .get()
+            .await
+            .map_err(|e| DistError::network(Box::new(e)))?;
+        let channel = (*conn).clone();
+        Ok(DistTonicServiceClient::new(channel)
+            .max_encoding_message_size(usize::MAX)
+            .max_decoding_message_size(usize::MAX))
+    }
 }
 
 #[async_trait::async_trait]
@@ -123,7 +178,7 @@ impl DistNetwork for DistTonicNetwork {
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
 
         (|| async {
-            let mut tonic_client = build_tonic_client(&node_id).await?;
+            let mut tonic_client = self.build_tonic_client(&node_id).await?;
             tonic_client
                 .send_tasks(send_tasks_req.clone())
                 .await
@@ -139,7 +194,7 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream> {
-        let mut tonic_client = build_tonic_client(&node_id).await?;
+        let mut tonic_client = self.build_tonic_client(&node_id).await?;
         let response = tonic_client
             .execute_task(serialize_task_id(task_id))
             .await
@@ -175,7 +230,7 @@ impl DistNetwork for DistTonicNetwork {
         job_id: Option<JobId>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
         (|| async {
-            let mut tonic_client = build_tonic_client(&node_id).await?;
+            let mut tonic_client = self.build_tonic_client(&node_id).await?;
             let req = protobuf::GetJobStatusReq {
                 job_id: job_id.as_ref().map(|id| id.to_string()),
             };
@@ -206,7 +261,7 @@ impl DistNetwork for DistTonicNetwork {
 
     async fn cleanup_job(&self, node_id: NodeId, job_id: JobId) -> DistResult<()> {
         (|| async {
-            let mut tonic_client = build_tonic_client(&node_id).await?;
+            let mut tonic_client = self.build_tonic_client(&node_id).await?;
             let req = protobuf::CleanupJobReq {
                 job_id: job_id.to_string(),
             };
@@ -221,29 +276,4 @@ impl DistNetwork for DistTonicNetwork {
         .retry(retry_strategy())
         .await
     }
-}
-
-async fn build_tonic_channel(node_id: &NodeId) -> DistResult<Channel> {
-    let addr = format!("http://{}:{}", node_id.host, node_id.port);
-
-    (|| async {
-        let endpoint = Endpoint::from_shared(addr.clone())
-            .map_err(|e| DistError::network(Box::new(e)))?
-            .connect_timeout(DIST_RPC_CONNECT_TIMEOUT)
-            .timeout(DIST_RPC_TIMEOUT);
-
-        endpoint
-            .connect()
-            .await
-            .map_err(|e| DistError::network(Box::new(e)))
-    })
-    .retry(retry_strategy())
-    .await
-}
-
-async fn build_tonic_client(node_id: &NodeId) -> DistResult<DistTonicServiceClient<Channel>> {
-    let channel = build_tonic_channel(node_id).await?;
-    Ok(DistTonicServiceClient::new(channel)
-        .max_encoding_message_size(usize::MAX)
-        .max_decoding_message_size(usize::MAX))
 }
