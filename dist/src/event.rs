@@ -66,7 +66,20 @@ impl EventHandler {
             debug!("Received event: {event:?}");
             match event {
                 Event::CheckJobCompleted(job_id) => {
-                    self.handle_check_job_completed(job_id).await;
+                    let cluster = self.cluster.clone();
+                    let network = self.network.clone();
+                    let local_stages = self.local_stages.clone();
+                    let sender = self.sender.clone();
+                    tokio::spawn(async move {
+                        handle_check_job_completed(
+                            &cluster,
+                            &network,
+                            &local_stages,
+                            &sender,
+                            job_id,
+                        )
+                        .await;
+                    });
                 }
                 Event::CleanupJob(job_id) => {
                     self.handle_cleanup_job(job_id).await;
@@ -74,34 +87,6 @@ impl EventHandler {
                 Event::ReceivedStage0Tasks(stage0_ids) => {
                     self.handle_received_stage0_tasks(stage0_ids).await;
                 }
-            }
-        }
-    }
-
-    async fn handle_check_job_completed(&mut self, job_id: JobId) {
-        match (|| async {
-            check_job_completed(
-                &self.cluster,
-                &self.network,
-                &self.local_stages,
-                job_id.clone(),
-            )
-            .await
-        })
-        .retry(job_check_retry_strategy())
-        .await
-        {
-            Ok(Some(true)) => {
-                debug!("Job {job_id} completed, remove it from cluster");
-                if let Err(e) =
-                    send_event_with_timeout(&self.sender, Event::CleanupJob(job_id.clone())).await
-                {
-                    error!("Failed to send cleanup job event for job {job_id}: {e}");
-                }
-            }
-            Ok(_) => {}
-            Err(err) => {
-                error!("Failed to check job {job_id} completed: {err}");
             }
         }
     }
@@ -153,6 +138,31 @@ impl EventHandler {
                 );
             }
         });
+    }
+}
+
+async fn handle_check_job_completed(
+    cluster: &Arc<dyn DistCluster>,
+    network: &Arc<dyn DistNetwork>,
+    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
+    sender: &Sender<Event>,
+    job_id: JobId,
+) {
+    match (|| async { check_job_completed(cluster, network, local_stages, job_id.clone()).await })
+        .retry(job_check_retry_strategy())
+        .await
+    {
+        Ok(Some(true)) => {
+            debug!("Job {job_id} completed, remove it from cluster");
+            if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
+            {
+                error!("Failed to send cleanup job event for job {job_id}: {e}");
+            }
+        }
+        Ok(_) => {}
+        Err(err) => {
+            error!("Failed to check job {job_id} completed: {err}");
+        }
     }
 }
 

@@ -74,7 +74,7 @@ impl DistRuntime {
             status: status.clone(),
         };
 
-        let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(1024);
+        let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(8 * 1024);
 
         let event_handler = EventHandler {
             local_node: node_id.clone(),
@@ -457,13 +457,17 @@ impl DistRuntime {
     }
 }
 
+/// Tracks the runtime state of a single execution stage on the local node.
 #[derive(Debug)]
 pub struct StageState {
     pub stage_id: StageId,
     pub create_at_ms: i64,
     pub stage_plan: Arc<dyn ExecutionPlan>,
+    /// Partitions assigned to this local node for execution.
     pub assigned_partitions: HashSet<usize>,
+    /// Active and completed task groups for this stage on this node.
     pub task_sets: Vec<TaskSet>,
+    /// Global mapping of every task in the job to its assigned node.
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     pub job_meta: Arc<HashMap<String, String>>,
 }
@@ -524,6 +528,11 @@ impl StageState {
         self.assigned_partitions
             .difference(&executed_partitions)
             .count()
+    }
+
+    /// Returns true if all tasks assigned to this stage on the local node have completed.
+    pub fn all_assigned_partitions_completed(&self) -> bool {
+        self.num_running_tasks() == 0 && self.num_pending_tasks() == 0
     }
 
     pub fn get_plan(&mut self, partition: usize) -> DistResult<(Uuid, Arc<dyn ExecutionPlan>)> {
@@ -689,34 +698,24 @@ impl Drop for TaskStream {
         };
         debug!("Task {task_id} dropped with metrics: {task_metrics:?}");
 
-        let stages = self.stages.clone();
-        let sender = self.event_sender.clone();
-        tokio::spawn(async move {
-            let mut send_event = false;
-            {
-                let mut guard = stages.lock();
-                if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
-                    stage_state.complete_task(task_id.clone(), task_set_id, task_metrics);
-                    if stage_state.stage_id.stage == 0
-                        && stage_state.assigned_partitions_executed_at_least_once()
-                    {
-                        send_event = true;
-                    }
-                }
+        let should_send = {
+            let mut guard = self.stages.lock();
+            if let Some(stage_state) = guard.get_mut(&task_id.stage_id()) {
+                stage_state.complete_task(task_id.clone(), task_set_id, task_metrics);
+                stage_state.stage_id.stage == 0 && stage_state.all_assigned_partitions_completed()
+            } else {
+                false
             }
+        };
 
-            if send_event
-                && let Err(e) = send_event_with_timeout(
-                    &sender,
-                    Event::CheckJobCompleted(task_id.job_id.clone()),
-                )
-                .await
-            {
+        if should_send {
+            let event = Event::CheckJobCompleted(task_id.job_id.clone());
+            if let Err(e) = self.event_sender.try_send(event) {
                 error!(
                     "Failed to send CheckJobCompleted event after task {task_id} stream dropped: {e}"
                 );
             }
-        });
+        }
     }
 }
 
