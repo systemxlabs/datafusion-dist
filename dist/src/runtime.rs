@@ -18,7 +18,7 @@ use datafusion_physical_plan::{
 };
 
 use futures::{Stream, StreamExt, TryStreamExt};
-use log::{debug, error};
+use log::{debug, error, warn};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
@@ -274,8 +274,12 @@ impl DistRuntime {
 
             while let Some(batch) = df_stream.next().await {
                 let batch = batch.map_err(DistError::from);
-                if tx.send(batch).await.is_err() {
-                    return Ok(());
+                match tx.send(batch).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warn!("Dist driver task failed to send batch to channel: {e}");
+                        return Ok(());
+                    }
                 }
             }
             Ok(()) as DistResult<()>
