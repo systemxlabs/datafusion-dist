@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use backon::{ExponentialBuilder, Retryable};
+use futures::future::join_all;
 use log::{debug, error};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -82,26 +83,28 @@ impl EventHandler {
                     });
                 }
                 Event::CleanupJob(job_id) => {
-                    self.handle_cleanup_job(job_id).await;
+                    let local_node = self.local_node.clone();
+                    let cluster = self.cluster.clone();
+                    let network = self.network.clone();
+                    let local_stages = self.local_stages.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = cleanup_job(
+                            &local_node,
+                            &cluster,
+                            &network,
+                            &local_stages,
+                            job_id.clone(),
+                        )
+                        .await
+                        {
+                            error!("Failed to cleanup job {job_id}: {e}");
+                        }
+                    });
                 }
                 Event::ReceivedStage0Tasks(stage0_ids) => {
                     self.handle_received_stage0_tasks(stage0_ids).await;
                 }
             }
-        }
-    }
-
-    async fn handle_cleanup_job(&mut self, job_id: JobId) {
-        if let Err(e) = cleanup_job(
-            &self.local_node,
-            &self.cluster,
-            &self.network,
-            &self.local_stages,
-            job_id.clone(),
-        )
-        .await
-        {
-            error!("Failed to cleanup job {job_id}: {e}");
         }
     }
 
@@ -257,15 +260,22 @@ pub async fn cleanup_job(
     job_id: JobId,
 ) -> DistResult<()> {
     let alive_nodes = cluster.alive_nodes().await?;
+    let mut futures = Vec::new();
 
     for node_id in alive_nodes.keys() {
         if node_id == local_node {
             let mut guard = local_stages.lock();
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
-            drop(guard);
         } else {
-            network.cleanup_job(node_id.clone(), job_id.clone()).await?
+            let network = network.clone();
+            let node_id = node_id.clone();
+            let job_id = job_id.clone();
+            futures.push(async move { network.cleanup_job(node_id, job_id).await });
         }
+    }
+
+    for res in join_all(futures).await {
+        res?;
     }
     Ok(())
 }
