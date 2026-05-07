@@ -140,18 +140,20 @@ impl DistTonicService for DistTonicServer {
         Ok(Response::new(flight_data_stream))
     }
 
-    async fn get_job_status(
+    async fn get_job_statuses(
         &self,
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
-        let status: HashMap<StageId, StageInfo> = match request.into_inner().job_id {
-            Some(id) => self.runtime.get_local_job(id.into()),
-            None => self
-                .runtime
+        let req = request.into_inner();
+        let status: HashMap<StageId, StageInfo> = if let Some(job_ids) = req.job_ids {
+            self.runtime
+                .get_local_job_statuses(job_ids.job_ids.into_iter().map(Into::into).collect())
+        } else {
+            self.runtime
                 .get_local_jobs()
                 .into_values()
                 .flatten()
-                .collect(),
+                .collect()
         };
 
         let stage_infos = status
@@ -162,13 +164,13 @@ impl DistTonicService for DistTonicServer {
         Ok(Response::new(GetJobStatusResp { stage_infos }))
     }
 
-    async fn cleanup_job(
+    async fn cleanup_jobs(
         &self,
         request: Request<CleanupJobReq>,
     ) -> Result<Response<CleanupJobResp>, Status> {
-        let job_id = request.into_inner().job_id;
-
-        self.runtime.cleanup_local_job(job_id.into());
+        let job_ids = request.into_inner().job_ids;
+        self.runtime
+            .cleanup_local_jobs(job_ids.into_iter().map(Into::into).collect());
 
         Ok(Response::new(CleanupJobResp {}))
     }

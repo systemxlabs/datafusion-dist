@@ -365,24 +365,22 @@ impl DistRuntime {
         Ok(())
     }
 
-    pub fn cleanup_local_job(&self, job_id: JobId) {
-        let mut guard = self.stages.lock();
-        let stage_ids = guard
-            .iter()
-            .filter(|(stage_id, _)| stage_id.job_id == job_id)
-            .map(|(stage_id, _)| stage_id)
-            .collect::<Vec<_>>();
-        if !stage_ids.is_empty() {
-            debug!(
-                "Cleaning up local Job {job_id} stages [{}]",
-                stage_ids
-                    .iter()
-                    .map(|id| id.stage.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            guard.retain(|stage_id, _| stage_id.job_id != job_id);
+    pub fn cleanup_local_jobs(&self, job_ids: Vec<JobId>) {
+        debug!(
+            "Cleaning up local Jobs [{}]",
+            job_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        let job_ids: HashSet<JobId> = job_ids.into_iter().collect();
+        if job_ids.is_empty() {
+            return;
         }
+
+        let mut guard = self.stages.lock();
+        guard.retain(|stage_id, _| !job_ids.contains(&stage_id.job_id));
     }
 
     pub async fn cleanup_job(&self, job_id: JobId) -> DistResult<()> {
@@ -397,7 +395,12 @@ impl DistRuntime {
     }
 
     pub fn get_local_job(&self, job_id: JobId) -> HashMap<StageId, StageInfo> {
-        local_stage_stats(&self.stages, Some(job_id))
+        self.get_local_job_statuses(vec![job_id])
+    }
+
+    pub fn get_local_job_statuses(&self, job_ids: Vec<JobId>) -> HashMap<StageId, StageInfo> {
+        let job_ids: HashSet<JobId> = job_ids.into_iter().collect();
+        local_stage_stats(&self.stages, Some(&job_ids))
     }
 
     pub fn get_local_jobs(&self) -> HashMap<JobId, HashMap<StageId, StageInfo>> {
@@ -427,7 +430,7 @@ impl DistRuntime {
                 let network = self.network.clone();
                 let node_id = node_id.clone();
                 let handle =
-                    tokio::spawn(async move { network.get_job_status(node_id, None).await });
+                    tokio::spawn(async move { network.get_job_statuses(node_id, None).await });
                 handles.push(handle);
             }
         }
