@@ -212,7 +212,7 @@ pub async fn check_job_completed(
                 let node_id = node_id.clone();
                 let job_id = job_id.clone();
                 let handle = tokio::spawn(async move {
-                    network.get_job_status(node_id, Some(vec![job_id])).await
+                    network.get_job_statuses(node_id, Some(vec![job_id])).await
                 });
                 handles.push(handle);
             }
@@ -335,7 +335,7 @@ pub async fn cleanup_job(
             let network = network.clone();
             let node_id = node_id.clone();
             let job_id = job_id.clone();
-            futures.push(async move { network.cleanup_job(node_id, vec![job_id]).await });
+            futures.push(async move { network.cleanup_jobs(node_id, vec![job_id]).await });
         }
     }
 

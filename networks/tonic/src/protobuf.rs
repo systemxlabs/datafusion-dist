@@ -259,7 +259,7 @@ pub mod dist_tonic_service_client {
             ));
             self.inner.server_streaming(req, path, codec).await
         }
-        pub async fn get_job_status(
+        pub async fn get_job_statuses(
             &mut self,
             request: impl tonic::IntoRequest<super::GetJobStatusReq>,
         ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status> {
@@ -268,16 +268,16 @@ pub mod dist_tonic_service_client {
             })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/network_tonic.DistTonicService/GetJobStatus",
+                "/network_tonic.DistTonicService/GetJobStatuses",
             );
             let mut req = request.into_request();
             req.extensions_mut().insert(GrpcMethod::new(
                 "network_tonic.DistTonicService",
-                "GetJobStatus",
+                "GetJobStatuses",
             ));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn cleanup_job(
+        pub async fn cleanup_jobs(
             &mut self,
             request: impl tonic::IntoRequest<super::CleanupJobReq>,
         ) -> std::result::Result<tonic::Response<super::CleanupJobResp>, tonic::Status> {
@@ -286,11 +286,11 @@ pub mod dist_tonic_service_client {
             })?;
             let codec = tonic_prost::ProstCodec::default();
             let path =
-                http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/CleanupJob");
+                http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/CleanupJobs");
             let mut req = request.into_request();
             req.extensions_mut().insert(GrpcMethod::new(
                 "network_tonic.DistTonicService",
-                "CleanupJob",
+                "CleanupJobs",
             ));
             self.inner.unary(req, path, codec).await
         }
@@ -322,11 +322,11 @@ pub mod dist_tonic_service_server {
             &self,
             request: tonic::Request<super::TaskId>,
         ) -> std::result::Result<tonic::Response<Self::ExecuteTaskStream>, tonic::Status>;
-        async fn get_job_status(
+        async fn get_job_statuses(
             &self,
             request: tonic::Request<super::GetJobStatusReq>,
         ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status>;
-        async fn cleanup_job(
+        async fn cleanup_jobs(
             &self,
             request: tonic::Request<super::CleanupJobReq>,
         ) -> std::result::Result<tonic::Response<super::CleanupJobResp>, tonic::Status>;
@@ -483,11 +483,11 @@ pub mod dist_tonic_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/network_tonic.DistTonicService/GetJobStatus" => {
+                "/network_tonic.DistTonicService/GetJobStatuses" => {
                     #[allow(non_camel_case_types)]
-                    struct GetJobStatusSvc<T: DistTonicService>(pub Arc<T>);
+                    struct GetJobStatusesSvc<T: DistTonicService>(pub Arc<T>);
                     impl<T: DistTonicService> tonic::server::UnaryService<super::GetJobStatusReq>
-                        for GetJobStatusSvc<T>
+                        for GetJobStatusesSvc<T>
                     {
                         type Response = super::GetJobStatusResp;
                         type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
@@ -497,7 +497,7 @@ pub mod dist_tonic_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as DistTonicService>::get_job_status(&inner, request).await
+                                <T as DistTonicService>::get_job_statuses(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -508,7 +508,7 @@ pub mod dist_tonic_service_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = GetJobStatusSvc(inner);
+                        let method = GetJobStatusesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -524,10 +524,10 @@ pub mod dist_tonic_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/network_tonic.DistTonicService/CleanupJob" => {
+                "/network_tonic.DistTonicService/CleanupJobs" => {
                     #[allow(non_camel_case_types)]
-                    struct CleanupJobSvc<T: DistTonicService>(pub Arc<T>);
-                    impl<T: DistTonicService> tonic::server::UnaryService<super::CleanupJobReq> for CleanupJobSvc<T> {
+                    struct CleanupJobsSvc<T: DistTonicService>(pub Arc<T>);
+                    impl<T: DistTonicService> tonic::server::UnaryService<super::CleanupJobReq> for CleanupJobsSvc<T> {
                         type Response = super::CleanupJobResp;
                         type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
@@ -536,7 +536,7 @@ pub mod dist_tonic_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as DistTonicService>::cleanup_job(&inner, request).await
+                                <T as DistTonicService>::cleanup_jobs(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -547,7 +547,7 @@ pub mod dist_tonic_service_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = CleanupJobSvc(inner);
+                        let method = CleanupJobsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

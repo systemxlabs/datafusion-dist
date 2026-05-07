@@ -27,13 +27,13 @@ pub trait DistNetwork: Debug + Send + Sync {
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream>;
 
-    async fn get_job_status(
+    async fn get_job_statuses(
         &self,
         node_id: NodeId,
         job_ids: Option<Vec<JobId>>,
     ) -> DistResult<HashMap<StageId, StageInfo>>;
 
-    async fn cleanup_job(&self, node_id: NodeId, job_ids: Vec<JobId>) -> DistResult<()>;
+    async fn cleanup_jobs(&self, node_id: NodeId, job_ids: Vec<JobId>) -> DistResult<()>;
 }
 
 pub struct ScheduledTasks {

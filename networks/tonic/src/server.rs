@@ -140,7 +140,7 @@ impl DistTonicService for DistTonicServer {
         Ok(Response::new(flight_data_stream))
     }
 
-    async fn get_job_status(
+    async fn get_job_statuses(
         &self,
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
@@ -164,7 +164,7 @@ impl DistTonicService for DistTonicServer {
         Ok(Response::new(GetJobStatusResp { stage_infos }))
     }
 
-    async fn cleanup_job(
+    async fn cleanup_jobs(
         &self,
         request: Request<CleanupJobReq>,
     ) -> Result<Response<CleanupJobResp>, Status> {

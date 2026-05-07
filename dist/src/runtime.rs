@@ -446,7 +446,7 @@ impl DistRuntime {
                 let network = self.network.clone();
                 let node_id = node_id.clone();
                 let handle =
-                    tokio::spawn(async move { network.get_job_status(node_id, None).await });
+                    tokio::spawn(async move { network.get_job_statuses(node_id, None).await });
                 handles.push(handle);
             }
         }
