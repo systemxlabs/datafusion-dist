@@ -179,8 +179,10 @@ pub async fn check_job_completed(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: JobId,
 ) -> DistResult<Option<bool>> {
+    let job_ids = HashSet::from([job_id.clone()]);
+
     // First, get local status
-    let mut combined_status = local_stage_stats(local_stages, Some(job_id.clone()));
+    let mut combined_status = local_stage_stats(local_stages, Some(&job_ids));
 
     let local_node_id = network.local_node();
 
@@ -209,10 +211,9 @@ pub async fn check_job_completed(
                 let network = network.clone();
                 let node_id = node_id.clone();
                 let job_id = job_id.clone();
-                let handle =
-                    tokio::spawn(
-                        async move { network.get_job_status(node_id, Some(job_id)).await },
-                    );
+                let handle = tokio::spawn(async move {
+                    network.get_job_status(node_id, Some(vec![job_id])).await
+                });
                 handles.push(handle);
             }
         }
@@ -270,13 +271,13 @@ pub async fn check_job_completed(
 
 pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: Option<JobId>,
+    job_ids: Option<&HashSet<JobId>>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock();
 
     let mut result = HashMap::new();
     for (stage_id, stage_state) in guard.iter() {
-        if job_id.is_none() || stage_id.job_id.as_ref() == job_id.as_ref().unwrap().as_ref() {
+        if job_ids.is_none_or(|job_ids| job_ids.contains(&stage_id.job_id)) {
             let stage_info = StageInfo::from_stage_state(stage_state);
             result.insert(stage_id.clone(), stage_info);
         }
@@ -334,7 +335,7 @@ pub async fn cleanup_job(
             let network = network.clone();
             let node_id = node_id.clone();
             let job_id = job_id.clone();
-            futures.push(async move { network.cleanup_job(node_id, job_id).await });
+            futures.push(async move { network.cleanup_job(node_id, vec![job_id]).await });
         }
     }
 

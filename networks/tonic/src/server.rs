@@ -144,14 +144,16 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<GetJobStatusReq>,
     ) -> Result<Response<GetJobStatusResp>, Status> {
-        let status: HashMap<StageId, StageInfo> = match request.into_inner().job_id {
-            Some(id) => self.runtime.get_local_job(id.into()),
-            None => self
-                .runtime
+        let req = request.into_inner();
+        let status: HashMap<StageId, StageInfo> = if req.job_ids.is_empty() {
+            self.runtime
                 .get_local_jobs()
                 .into_values()
                 .flatten()
-                .collect(),
+                .collect()
+        } else {
+            self.runtime
+                .get_local_job_statuses(req.job_ids.into_iter().map(Into::into).collect())
         };
 
         let stage_infos = status
@@ -166,9 +168,9 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<CleanupJobReq>,
     ) -> Result<Response<CleanupJobResp>, Status> {
-        let job_id = request.into_inner().job_id;
-
-        self.runtime.cleanup_local_job(job_id.into());
+        let job_ids = request.into_inner().job_ids;
+        self.runtime
+            .cleanup_local_jobs(job_ids.into_iter().map(Into::into).collect());
 
         Ok(Response::new(CleanupJobResp {}))
     }

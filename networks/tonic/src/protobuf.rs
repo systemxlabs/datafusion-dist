@@ -38,8 +38,8 @@ pub struct StagePlan {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetJobStatusReq {
-    #[prost(string, optional, tag = "1")]
-    pub job_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "1")]
+    pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusResp {
@@ -78,8 +78,8 @@ pub struct TaskMetrics {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CleanupJobReq {
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "1")]
+    pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CleanupJobResp {}

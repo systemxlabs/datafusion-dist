@@ -366,22 +366,36 @@ impl DistRuntime {
     }
 
     pub fn cleanup_local_job(&self, job_id: JobId) {
+        self.cleanup_local_jobs(vec![job_id]);
+    }
+
+    pub fn cleanup_local_jobs(&self, job_ids: Vec<JobId>) {
+        let job_ids: HashSet<JobId> = job_ids.into_iter().collect();
+        if job_ids.is_empty() {
+            return;
+        }
+
         let mut guard = self.stages.lock();
         let stage_ids = guard
             .iter()
-            .filter(|(stage_id, _)| stage_id.job_id == job_id)
+            .filter(|(stage_id, _)| job_ids.contains(&stage_id.job_id))
             .map(|(stage_id, _)| stage_id)
             .collect::<Vec<_>>();
         if !stage_ids.is_empty() {
             debug!(
-                "Cleaning up local Job {job_id} stages [{}]",
+                "Cleaning up local Jobs [{}] stages [{}]",
+                job_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 stage_ids
                     .iter()
                     .map(|id| id.stage.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            guard.retain(|stage_id, _| stage_id.job_id != job_id);
+            guard.retain(|stage_id, _| !job_ids.contains(&stage_id.job_id));
         }
     }
 
@@ -397,7 +411,12 @@ impl DistRuntime {
     }
 
     pub fn get_local_job(&self, job_id: JobId) -> HashMap<StageId, StageInfo> {
-        local_stage_stats(&self.stages, Some(job_id))
+        self.get_local_job_statuses(vec![job_id])
+    }
+
+    pub fn get_local_job_statuses(&self, job_ids: Vec<JobId>) -> HashMap<StageId, StageInfo> {
+        let job_ids: HashSet<JobId> = job_ids.into_iter().collect();
+        local_stage_stats(&self.stages, Some(&job_ids))
     }
 
     pub fn get_local_jobs(&self) -> HashMap<JobId, HashMap<StageId, StageInfo>> {
