@@ -14,7 +14,8 @@ use arrow::datatypes::Schema;
 use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
-    ExecutionPlan, display::DisplayableExecutionPlan, stream::RecordBatchStreamAdapter,
+    ExecutionPlan, RecordBatchStream, display::DisplayableExecutionPlan,
+    stream::RecordBatchStreamAdapter,
 };
 
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -583,25 +584,6 @@ impl StageState {
         }
     }
 
-    pub fn assigned_partitions_executed_at_least_once(&self) -> bool {
-        let executed_partitions = self
-            .task_sets
-            .iter()
-            .flat_map(|task_set| {
-                let mut executed = task_set.running_partitions.clone();
-                executed.extend(task_set.dropped_partitions.keys());
-                executed
-            })
-            .collect::<HashSet<_>>();
-
-        for partition in self.assigned_partitions.iter() {
-            if !executed_partitions.contains(partition) {
-                return false;
-            }
-        }
-        true
-    }
-
     pub fn never_executed(&self) -> bool {
         self.task_sets
             .iter()
@@ -630,8 +612,6 @@ pub struct TaskMetrics {
     pub output_bytes: usize,
     pub completed: bool,
 }
-
-use datafusion_physical_plan::RecordBatchStream;
 
 pub struct TaskStream {
     pub task_id: TaskId,
