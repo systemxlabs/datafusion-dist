@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use backon::{ExponentialBuilder, Retryable};
 use futures::future::join_all;
@@ -259,11 +263,34 @@ pub async fn cleanup_job(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: JobId,
 ) -> DistResult<()> {
-    let alive_nodes = cluster.alive_nodes().await?;
+    let target_nodes = {
+        let guard = local_stages.lock();
+        guard
+            .values()
+            .find(|stage| stage.stage_id.job_id == job_id)
+            .map(|stage| {
+                let mut nodes: HashSet<NodeId> =
+                    stage.job_task_distribution.values().cloned().collect();
+                nodes.insert(local_node.clone());
+                nodes
+            })
+    };
+
+    let target_nodes = match target_nodes {
+        Some(nodes) => nodes,
+        None => {
+            let alive_nodes = cluster.alive_nodes().await?;
+            let mut nodes = HashSet::new();
+            nodes.extend(alive_nodes.keys().cloned());
+            nodes.insert(local_node.clone());
+            nodes
+        }
+    };
+
     let mut futures = Vec::new();
 
-    for node_id in alive_nodes.keys() {
-        if node_id == local_node {
+    for node_id in target_nodes {
+        if &node_id == local_node {
             let mut guard = local_stages.lock();
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
         } else {
