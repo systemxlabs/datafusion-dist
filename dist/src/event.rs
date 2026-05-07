@@ -6,7 +6,7 @@ use std::{
 
 use backon::{ExponentialBuilder, Retryable};
 use futures::future::join_all;
-use log::{debug, error};
+use log::{debug, error, warn};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -182,20 +182,49 @@ pub async fn check_job_completed(
     // First, get local status
     let mut combined_status = local_stage_stats(local_stages, Some(job_id.clone()));
 
-    // Then, get status from all other alive nodes
-    let node_states = cluster.alive_nodes().await?;
-
     let local_node_id = network.local_node();
 
+    // Get alive nodes for validation
+    let alive_nodes = cluster.alive_nodes().await?;
+    let alive_set: HashSet<NodeId> = alive_nodes.keys().cloned().collect();
+
+    // Determine target nodes from job_task_distribution if available
+    let target_nodes = {
+        let guard = local_stages.lock();
+        guard
+            .values()
+            .find(|stage| stage.stage_id.job_id == job_id)
+            .map(|stage| {
+                let mut nodes: HashSet<NodeId> =
+                    stage.job_task_distribution.values().cloned().collect();
+                nodes.remove(&local_node_id);
+                nodes
+            })
+    };
+
     let mut handles = Vec::new();
-    for node_id in node_states.keys() {
-        if *node_id != local_node_id {
-            let network = network.clone();
-            let node_id = node_id.clone();
-            let job_id = job_id.clone();
-            let handle =
-                tokio::spawn(async move { network.get_job_status(node_id, Some(job_id)).await });
-            handles.push(handle);
+    match target_nodes {
+        Some(nodes) if nodes.is_subset(&alive_set) => {
+            for node_id in nodes {
+                let network = network.clone();
+                let node_id = node_id.clone();
+                let job_id = job_id.clone();
+                let handle =
+                    tokio::spawn(
+                        async move { network.get_job_status(node_id, Some(job_id)).await },
+                    );
+                handles.push(handle);
+            }
+        }
+        Some(nodes) => {
+            let missing: Vec<_> = nodes.difference(&alive_set).collect();
+            warn!(
+                "Job {job_id} is polluted: task nodes {missing:?} are not alive, treat as completed"
+            );
+            return Ok(Some(true));
+        }
+        None => {
+            warn!("No job_task_distribution found for job {job_id}, skipping remote status check");
         }
     }
 
@@ -263,6 +292,9 @@ pub async fn cleanup_job(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_id: JobId,
 ) -> DistResult<()> {
+    let alive_nodes = cluster.alive_nodes().await?;
+    let alive_set: HashSet<NodeId> = alive_nodes.keys().cloned().collect();
+
     let target_nodes = {
         let guard = local_stages.lock();
         guard
@@ -276,20 +308,25 @@ pub async fn cleanup_job(
             })
     };
 
-    let target_nodes = match target_nodes {
-        Some(nodes) => nodes,
+    let nodes_to_clean: HashSet<NodeId> = match target_nodes {
+        Some(nodes) if nodes.is_subset(&alive_set) => nodes,
+        Some(nodes) => {
+            let missing: Vec<_> = nodes.difference(&alive_set).collect();
+            warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive");
+            nodes
+                .into_iter()
+                .filter(|n| n == local_node || alive_set.contains(n))
+                .collect()
+        }
         None => {
-            let alive_nodes = cluster.alive_nodes().await?;
-            let mut nodes = HashSet::new();
-            nodes.extend(alive_nodes.keys().cloned());
+            let mut nodes = alive_set;
             nodes.insert(local_node.clone());
             nodes
         }
     };
 
     let mut futures = Vec::new();
-
-    for node_id in target_nodes {
+    for node_id in nodes_to_clean {
         if &node_id == local_node {
             let mut guard = local_stages.lock();
             guard.retain(|stage_id, _| stage_id.job_id != job_id);
