@@ -38,8 +38,12 @@ message StagePlan {
   bytes plan = 2;
 }
 
-message GetJobStatusReq {
+message JobIds {
   repeated string job_ids = 1;
+}
+
+message GetJobStatusReq {
+  optional JobIds job_ids = 1;
 }
 
 message GetJobStatusResp {

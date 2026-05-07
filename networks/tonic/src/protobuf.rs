@@ -37,9 +37,14 @@ pub struct StagePlan {
     pub plan: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetJobStatusReq {
+pub struct JobIds {
     #[prost(string, repeated, tag = "1")]
     pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetJobStatusReq {
+    #[prost(message, optional, tag = "1")]
+    pub job_ids: ::core::option::Option<JobIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetJobStatusResp {

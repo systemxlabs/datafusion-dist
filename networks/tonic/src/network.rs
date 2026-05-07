@@ -235,12 +235,9 @@ impl DistNetwork for DistTonicNetwork {
     ) -> DistResult<HashMap<StageId, StageInfo>> {
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
-            let job_ids = job_ids
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|id| id.to_string())
-                .collect();
+            let job_ids = job_ids.clone().map(|job_ids| protobuf::JobIds {
+                job_ids: job_ids.into_iter().map(|id| id.to_string()).collect(),
+            });
             let req = protobuf::GetJobStatusReq { job_ids };
 
             let resp = tonic_client
