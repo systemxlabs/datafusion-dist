@@ -26,6 +26,14 @@ pub enum Event {
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EventType {
+    CheckJobCompleted,
+    CleanupJob,
+    ReceivedStage0Tasks,
+}
+
+const MAX_BATCH_SIZE: usize = 64;
 const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
@@ -49,6 +57,43 @@ pub async fn send_event_with_timeout(sender: &Sender<Event>, event: Event) -> Di
         .map_err(|e| DistError::internal(format!("Failed to send event: {e}")))
 }
 
+/// Merge duplicate events by `(job_id, event_type)`.
+///
+/// - `CheckJobCompleted(JobId)` and `CleanupJob(JobId)` are deduplicated:
+///   only the first occurrence for a given `(job_id, event_type)` is kept.
+/// - `ReceivedStage0Tasks(Vec<StageId>)` for the same job are merged into
+///   a single event whose `stage0_ids` is the union of all incoming vectors.
+fn merge_events(events: &mut Vec<Event>) -> Vec<Event> {
+    let mut merged: HashMap<(JobId, EventType), Event> = HashMap::with_capacity(events.len());
+    for event in events.drain(..) {
+        let key = match &event {
+            Event::CheckJobCompleted(job_id) => (job_id.clone(), EventType::CheckJobCompleted),
+            Event::CleanupJob(job_id) => (job_id.clone(), EventType::CleanupJob),
+            Event::ReceivedStage0Tasks(stage0_ids) => {
+                let job_id = stage0_ids
+                    .first()
+                    .expect("ReceivedStage0Tasks should not be empty")
+                    .job_id
+                    .clone();
+                (job_id, EventType::ReceivedStage0Tasks)
+            }
+        };
+        merged
+            .entry(key)
+            .and_modify(|existing| {
+                if let Event::ReceivedStage0Tasks(existing_ids) = existing {
+                    if let Event::ReceivedStage0Tasks(new_ids) = &event {
+                        let mut set: HashSet<StageId> = existing_ids.iter().cloned().collect();
+                        set.extend(new_ids.iter().cloned());
+                        *existing = Event::ReceivedStage0Tasks(set.into_iter().collect());
+                    }
+                }
+            })
+            .or_insert(event);
+    }
+    merged.into_values().collect()
+}
+
 pub fn start_event_handler(mut handler: EventHandler) {
     tokio::spawn(async move {
         handler.start().await;
@@ -67,47 +112,62 @@ pub struct EventHandler {
 
 impl EventHandler {
     pub async fn start(&mut self) {
-        while let Some(event) = self.receiver.recv().await {
-            debug!("Received event: {event:?}");
-            match event {
-                Event::CheckJobCompleted(job_id) => {
-                    let cluster = self.cluster.clone();
-                    let network = self.network.clone();
-                    let local_stages = self.local_stages.clone();
-                    let sender = self.sender.clone();
-                    tokio::spawn(async move {
-                        handle_check_job_completed(
-                            &cluster,
-                            &network,
-                            &local_stages,
-                            &sender,
-                            job_id,
-                        )
-                        .await;
-                    });
-                }
-                Event::CleanupJob(job_id) => {
-                    let local_node = self.local_node.clone();
-                    let cluster = self.cluster.clone();
-                    let network = self.network.clone();
-                    let local_stages = self.local_stages.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = cleanup_job(
-                            &local_node,
-                            &cluster,
-                            &network,
-                            &local_stages,
-                            job_id.clone(),
-                        )
-                        .await
-                        {
-                            error!("Failed to cleanup job {job_id}: {e}");
-                        }
-                    });
-                }
-                Event::ReceivedStage0Tasks(stage0_ids) => {
-                    self.handle_received_stage0_tasks(stage0_ids).await;
-                }
+        let mut batch = Vec::with_capacity(MAX_BATCH_SIZE);
+        loop {
+            batch.clear();
+            let received = self.receiver.recv_many(&mut batch, MAX_BATCH_SIZE).await;
+            if received == 0 {
+                break;
+            }
+            debug!("Received batch of {received} events, merging duplicates");
+            let merged = merge_events(&mut batch);
+            debug!("Merged into {} events", merged.len());
+            for event in merged {
+                self.handle_event(event).await;
+            }
+        }
+    }
+
+    async fn handle_event(&self, event: Event) {
+        debug!("Handling event: {event:?}");
+        match event {
+            Event::CheckJobCompleted(job_id) => {
+                let cluster = self.cluster.clone();
+                let network = self.network.clone();
+                let local_stages = self.local_stages.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    handle_check_job_completed(
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        &sender,
+                        job_id,
+                    )
+                    .await;
+                });
+            }
+            Event::CleanupJob(job_id) => {
+                let local_node = self.local_node.clone();
+                let cluster = self.cluster.clone();
+                let network = self.network.clone();
+                let local_stages = self.local_stages.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = cleanup_job(
+                        &local_node,
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        job_id.clone(),
+                    )
+                    .await
+                    {
+                        error!("Failed to cleanup job {job_id}: {e}");
+                    }
+                });
+            }
+            Event::ReceivedStage0Tasks(stage0_ids) => {
+                self.handle_received_stage0_tasks(stage0_ids).await;
             }
         }
     }
@@ -343,4 +403,138 @@ pub async fn cleanup_job(
         res?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job_id(id: &str) -> JobId {
+        Arc::from(id)
+    }
+
+    fn stage_id(job_id: JobId, stage: u32) -> StageId {
+        StageId { job_id, stage }
+    }
+
+    #[test]
+    fn test_merge_check_job_completed_dedup() {
+        let j1 = job_id("job1");
+        let mut events = vec![
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CheckJobCompleted(j1.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 1);
+        assert!(matches!(merged[0], Event::CheckJobCompleted(ref id) if id == &j1));
+    }
+
+    #[test]
+    fn test_merge_cleanup_job_dedup() {
+        let j1 = job_id("job1");
+        let mut events = vec![
+            Event::CleanupJob(j1.clone()),
+            Event::CleanupJob(j1.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 1);
+        assert!(matches!(merged[0], Event::CleanupJob(ref id) if id == &j1));
+    }
+
+    #[test]
+    fn test_merge_received_stage0_tasks_union() {
+        let j1 = job_id("job1");
+        let mut events = vec![
+            Event::ReceivedStage0Tasks(vec![stage_id(j1.clone(), 0)]),
+            Event::ReceivedStage0Tasks(vec![stage_id(j1.clone(), 1)]),
+            Event::ReceivedStage0Tasks(vec![stage_id(j1.clone(), 0), stage_id(j1.clone(), 2)]),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 1);
+        if let Event::ReceivedStage0Tasks(ids) = &merged[0] {
+            assert_eq!(ids.len(), 3);
+            let stages: HashSet<u32> = ids.iter().map(|s| s.stage).collect();
+            assert_eq!(stages, HashSet::from([0, 1, 2]));
+        } else {
+            panic!("Expected ReceivedStage0Tasks");
+        }
+    }
+
+    #[test]
+    fn test_merge_no_cross_job() {
+        let j1 = job_id("job1");
+        let j2 = job_id("job2");
+        let mut events = vec![
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CheckJobCompleted(j2.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_no_cross_type() {
+        let j1 = job_id("job1");
+        let mut events = vec![
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CleanupJob(j1.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_mixed_events() {
+        let j1 = job_id("job1");
+        let j2 = job_id("job2");
+        let mut events = vec![
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CleanupJob(j1.clone()),
+            Event::CheckJobCompleted(j2.clone()),
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CleanupJob(j2.clone()),
+            Event::CleanupJob(j2.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 4);
+    }
+
+    #[test]
+    fn test_merge_empty_vec() {
+        let mut events: Vec<Event> = vec![];
+        let merged = merge_events(&mut events);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_preserves_order_for_single_events() {
+        let j1 = job_id("job1");
+        let j2 = job_id("job2");
+        let mut events = vec![
+            Event::CheckJobCompleted(j1.clone()),
+            Event::CheckJobCompleted(j2.clone()),
+        ];
+        let merged = merge_events(&mut events);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_recv_many_batch() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(16);
+        let j1 = job_id("job1");
+        let j2 = job_id("job2");
+
+        tx.send(Event::CheckJobCompleted(j1.clone())).await.unwrap();
+        tx.send(Event::CheckJobCompleted(j1.clone())).await.unwrap();
+        tx.send(Event::CheckJobCompleted(j2.clone())).await.unwrap();
+        drop(tx);
+
+        let mut batch = Vec::with_capacity(MAX_BATCH_SIZE);
+        let received = rx.recv_many(&mut batch, MAX_BATCH_SIZE).await;
+        assert_eq!(received, 3);
+
+        let merged = merge_events(&mut batch);
+        assert_eq!(merged.len(), 2);
+    }
 }
