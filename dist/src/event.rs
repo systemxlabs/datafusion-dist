@@ -210,7 +210,9 @@ pub async fn check_job_completed(
                 let node_id = node_id.clone();
                 let job_id = job_id.clone();
                 let handle =
-                    tokio::spawn(async move { network.get_job_status(node_id, Some(job_id)).await });
+                    tokio::spawn(
+                        async move { network.get_job_status(node_id, Some(job_id)).await },
+                    );
                 handles.push(handle);
             }
         }
@@ -222,9 +224,7 @@ pub async fn check_job_completed(
             return Ok(Some(true));
         }
         None => {
-            warn!(
-                "No job_task_distribution found for job {job_id}, skipping remote status check"
-            );
+            warn!("No job_task_distribution found for job {job_id}, skipping remote status check");
         }
     }
 
@@ -312,10 +312,11 @@ pub async fn cleanup_job(
         Some(nodes) if nodes.is_subset(&alive_set) => nodes,
         Some(nodes) => {
             let missing: Vec<_> = nodes.difference(&alive_set).collect();
-            warn!(
-                "Job {job_id} is polluted: task nodes {missing:?} are not alive"
-            );
-            nodes.into_iter().filter(|n| n == local_node || alive_set.contains(n)).collect()
+            warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive");
+            nodes
+                .into_iter()
+                .filter(|n| n == local_node || alive_set.contains(n))
+                .collect()
         }
         None => {
             let mut nodes = alive_set;
