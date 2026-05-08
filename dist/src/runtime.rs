@@ -20,7 +20,7 @@ use datafusion_physical_plan::{
 
 use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
 use log::{debug, error, warn};
-use tokio::sync::mpsc::Sender;
+use tokio::{sync::mpsc::Sender, task::AbortHandle};
 
 use crate::{
     DistError, DistResult, JobId,
@@ -259,7 +259,6 @@ impl DistRuntime {
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
         let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize)?;
         let schema = plan.schema();
-        drop(guard);
 
         let mut receiver_stream_builder = ReceiverStreamBuilder::new(2);
 
@@ -282,7 +281,9 @@ impl DistRuntime {
             Ok(()) as DistResult<()>
         };
 
-        receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
+        let abort_handle = receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
+        stage_state.start_task(task_id.partition as usize, task_set_id, abort_handle)?;
+        drop(guard);
 
         let stream = receiver_stream_builder.build();
         let stream = Box::pin(RecordBatchStreamAdapter::new(
@@ -375,8 +376,9 @@ impl DistRuntime {
             return;
         }
 
-        let mut guard = self.stages.lock();
-        guard.retain(|stage_id, _| !job_ids.contains(&stage_id.job_id));
+        cleanup_stages(&mut self.stages.lock(), |stage_id| {
+            job_ids.contains(&stage_id.job_id)
+        });
     }
 
     pub fn get_local_jobs(&self, job_ids: Option<&Vec<JobId>>) -> HashMap<StageId, StageInfo> {
@@ -477,7 +479,8 @@ impl StageState {
             .task_sets
             .iter()
             .flat_map(|task_set| {
-                let mut executed = task_set.running_partitions.clone();
+                let mut executed: HashSet<usize> =
+                    task_set.running_partitions.keys().copied().collect();
                 executed.extend(task_set.dropped_partitions.keys());
                 executed
             })
@@ -503,23 +506,36 @@ impl StageState {
 
         for task_set in self.task_sets.iter_mut() {
             if !task_set.never_executed(&partition) {
-                task_set.running_partitions.insert(partition);
                 return Ok((task_set.id, task_set.shared_plan.clone()));
             }
         }
 
         let task_set_id = Uuid::new_v4();
-        let mut new_task_set = TaskSet {
+        let new_task_set = TaskSet {
             id: task_set_id,
             shared_plan: self.stage_plan.clone().reset_state()?,
-            running_partitions: HashSet::new(),
+            running_partitions: HashMap::new(),
             dropped_partitions: HashMap::new(),
         };
-        new_task_set.running_partitions.insert(partition);
         let shared_plan = new_task_set.shared_plan.clone();
         self.task_sets.push(new_task_set);
 
         Ok((task_set_id, shared_plan))
+    }
+
+    pub fn start_task(
+        &mut self,
+        partition: usize,
+        task_set_id: Uuid,
+        abort_handle: AbortHandle,
+    ) -> DistResult<()> {
+        let task_set = self
+            .task_sets
+            .iter_mut()
+            .find(|task_set| task_set.id == task_set_id)
+            .ok_or_else(|| DistError::internal(format!("Task set {task_set_id} not found")))?;
+        task_set.running_partitions.insert(partition, abort_handle);
+        Ok(())
     }
 
     pub fn complete_task(&mut self, task_id: TaskId, task_set_id: Uuid, task_metrics: TaskMetrics) {
@@ -542,20 +558,32 @@ impl StageState {
             .iter()
             .all(|set| set.running_partitions.is_empty() && set.dropped_partitions.is_empty())
     }
+
+    pub fn abort_running_tasks(&mut self) {
+        for task_set in &mut self.task_sets {
+            task_set.abort_running_partitions();
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct TaskSet {
     pub id: Uuid,
     pub shared_plan: Arc<dyn ExecutionPlan>,
-    pub running_partitions: HashSet<usize>,
+    pub running_partitions: HashMap<usize, AbortHandle>,
     pub dropped_partitions: HashMap<usize, TaskMetrics>,
 }
 
 impl TaskSet {
     pub fn never_executed(&self, partition: &usize) -> bool {
-        !self.running_partitions.contains(partition)
+        !self.running_partitions.contains_key(partition)
             && !self.dropped_partitions.contains_key(partition)
+    }
+
+    pub fn abort_running_partitions(&mut self) {
+        for (_, abort_handle) in self.running_partitions.drain() {
+            abort_handle.abort();
+        }
     }
 }
 
@@ -680,9 +708,23 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
                         .join(", "),
                     config.job_ttl.as_secs()
                 );
-                guard.retain(|stage_id, _| !to_cleanup.contains(stage_id));
+                cleanup_stages(&mut guard, |stage_id| to_cleanup.contains(stage_id));
             }
             drop(guard);
+        }
+    });
+}
+
+pub(crate) fn cleanup_stages(
+    stages: &mut HashMap<StageId, StageState>,
+    mut should_cleanup: impl FnMut(&StageId) -> bool,
+) {
+    stages.retain(|stage_id, stage_state| {
+        if should_cleanup(stage_id) {
+            stage_state.abort_running_tasks();
+            false
+        } else {
+            true
         }
     });
 }

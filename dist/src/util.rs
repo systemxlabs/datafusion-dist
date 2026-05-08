@@ -19,7 +19,7 @@ use serde::Serialize;
 use tokio::{
     runtime::Handle,
     sync::mpsc::{Receiver, Sender},
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
 };
 
 use crate::{
@@ -88,12 +88,12 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     }
 
     /// Same as [`Self::spawn`] but it spawns the task on the provided runtime
-    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle)
+    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle) -> AbortHandle
     where
         F: Future<Output = DistResult<()>>,
         F: Send + 'static,
     {
-        self.join_set.spawn_on(task, handle);
+        self.join_set.spawn_on(task, handle)
     }
 
     /// Create a stream of all data written to `tx`

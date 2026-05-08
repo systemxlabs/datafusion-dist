@@ -105,7 +105,7 @@ pub struct TaskSetInfo {
 impl TaskSetInfo {
     pub fn from_task_set(task_set: &TaskSet) -> Self {
         TaskSetInfo {
-            running_partitions: task_set.running_partitions.clone(),
+            running_partitions: task_set.running_partitions.keys().copied().collect(),
             dropped_partitions: task_set.dropped_partitions.clone(),
         }
     }

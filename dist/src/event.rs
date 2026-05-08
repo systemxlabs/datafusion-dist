@@ -16,7 +16,7 @@ use crate::{
     config::DistConfig,
     network::{DistNetwork, StageInfo},
     planner::StageId,
-    runtime::StageState,
+    runtime::{StageState, cleanup_stages},
 };
 
 #[derive(Debug, Clone)]
@@ -404,8 +404,9 @@ pub async fn cleanup_jobs(
 
     if let Some(local_job_ids) = jobs_by_node.remove(&network.local_node()) {
         let local_job_ids: HashSet<JobId> = local_job_ids.into_iter().collect();
-        let mut guard = local_stages.lock();
-        guard.retain(|stage_id, _| !local_job_ids.contains(&stage_id.job_id));
+        cleanup_stages(&mut local_stages.lock(), |stage_id| {
+            local_job_ids.contains(&stage_id.job_id)
+        });
     }
 
     let mut futures = Vec::new();
