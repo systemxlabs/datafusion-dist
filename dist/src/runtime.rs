@@ -383,7 +383,7 @@ impl DistRuntime {
         local_jobs(&self.stages, job_ids)
     }
 
-    pub async fn get_all_jobs(&self) -> DistResult<HashMap<JobId, HashMap<StageId, StageInfo>>> {
+    pub async fn get_all_jobs(&self) -> DistResult<HashMap<StageId, StageInfo>> {
         // First, get local status for all jobs
         let mut combined_status = local_jobs(&self.stages, None);
 
@@ -411,16 +411,7 @@ impl DistRuntime {
             }
         }
 
-        // Aggregate stats by job_id
-        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
-        for (stage_id, stage_info) in combined_status {
-            job_stats
-                .entry(stage_id.job_id.clone())
-                .or_default()
-                .insert(stage_id, stage_info);
-        }
-
-        Ok(job_stats)
+        Ok(combined_status)
     }
 }
 

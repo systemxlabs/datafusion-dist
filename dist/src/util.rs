@@ -1,8 +1,14 @@
 use std::{
+    collections::{BTreeMap, HashMap},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use arrow::{
+    array::{RecordBatch, StringBuilder},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    error::ArrowError,
+};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_plan::{
@@ -15,7 +21,7 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::{DistError, DistResult};
+use crate::{DistError, DistResult, network::StageInfo, planner::StageId};
 
 /// Check if the physical plan is a simple `SELECT 1` query.
 /// This is used to identify queries that should be executed locally.
@@ -130,6 +136,59 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         // Merge the streams together so whichever is ready first
         // produces the batch
         futures::stream::select(rx_stream, check_stream).boxed()
+    }
+}
+
+#[derive(Debug)]
+pub struct JobsArrowConverter {
+    schema: SchemaRef,
+}
+
+impl Default for JobsArrowConverter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl JobsArrowConverter {
+    pub fn new() -> Self {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("job_id", DataType::Utf8, false),
+            Field::new("stages", DataType::Utf8, false),
+        ]));
+        Self { schema }
+    }
+
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    pub fn convert(&self, jobs: &HashMap<StageId, StageInfo>) -> Result<RecordBatch, ArrowError> {
+        let mut grouped_jobs = BTreeMap::new();
+        for (stage_id, stage_info) in jobs {
+            grouped_jobs
+                .entry(stage_id.job_id.clone())
+                .or_insert_with(BTreeMap::new)
+                .insert(stage_id.stage.to_string(), stage_info.clone());
+        }
+
+        let mut job_id_builder = StringBuilder::new();
+        let mut stages_builder = StringBuilder::new();
+
+        for (job_id, stages) in grouped_jobs {
+            job_id_builder.append_value(job_id.as_ref());
+            let stages_json = serde_json::to_string(&stages)
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+            stages_builder.append_value(stages_json);
+        }
+
+        RecordBatch::try_new(
+            self.schema.clone(),
+            vec![
+                Arc::new(job_id_builder.finish()),
+                Arc::new(stages_builder.finish()),
+            ],
+        )
     }
 }
 

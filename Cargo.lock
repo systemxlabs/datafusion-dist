@@ -1179,6 +1179,7 @@ dependencies = [
  "log",
  "parking_lot",
  "serde",
+ "serde_json",
  "sysinfo",
  "tokio",
  "uuid",
