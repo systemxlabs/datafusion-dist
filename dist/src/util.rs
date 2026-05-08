@@ -83,7 +83,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.tx.clone()
     }
 
-    /// Same as [`Self::spawn`] but it spawns the task on the provided runtime
+    /// Spawn the task on the provided runtime and return a handle for cancellation.
     pub fn spawn_on<F>(&mut self, task: F, handle: &Handle) -> AbortHandle
     where
         F: Future<Output = DistResult<()>>,
@@ -108,9 +108,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 
         // Future that checks the spawned task result, and propagates panic if seen.
         let check = async move {
-            let Some(task) = task else {
-                return None;
-            };
+            let task = task?;
 
             match task.await {
                 Ok(Ok(())) => None,
