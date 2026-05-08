@@ -50,48 +50,43 @@ pub async fn send_event_with_timeout(sender: &Sender<Event>, event: Event) -> Di
         .map_err(|e| DistError::internal(format!("Failed to send event: {e}")))
 }
 
-/// Merge duplicate events by `(job_id, event_kind)`.
+/// Merge duplicate events in a batch.
 ///
-/// - `CheckJobCompleted(JobId)` and `CleanupJob(JobId)` are deduplicated:
-///   only the first occurrence for a given `(job_id, event_kind)` is kept.
-/// - `ReceivedStage0Tasks(Vec<StageId>)` for the same job are merged into
-///   a single event whose `stage0_ids` preserves first-occurrence order
-///   (IDs from the first event keep their relative order; new IDs from
-///   subsequent events are appended in the order they first appear).
+/// - `CheckJobCompleted(JobId)` and `CleanupJob(JobId)` are deduplicated by
+///   `job_id`: only the first occurrence for a given job is kept.
+/// - All non-empty `ReceivedStage0Tasks(Vec<StageId>)` are concatenated into a
+///   single event, preserving batch order.
 /// - Empty `ReceivedStage0Tasks` vectors are silently skipped.
 fn merge_events(events: &mut Vec<Event>) -> Vec<Event> {
     let mut merged: Vec<Event> = Vec::with_capacity(events.len());
-    let mut index_map: HashMap<(JobId, u8), usize> = HashMap::with_capacity(events.len());
+    let mut seen_check_jobs = HashSet::with_capacity(events.len());
+    let mut seen_cleanup_jobs = HashSet::with_capacity(events.len());
+    let mut stage0_ids = Vec::new();
+
     for event in events.drain(..) {
-        let key = match &event {
-            Event::CheckJobCompleted(job_id) => (job_id.clone(), 0u8),
-            Event::CleanupJob(job_id) => (job_id.clone(), 1u8),
-            Event::ReceivedStage0Tasks(stage0_ids) => {
-                if stage0_ids.is_empty() {
-                    continue;
-                }
-                let job_id = stage0_ids[0].job_id.clone();
-                (job_id, 2u8)
-            }
-        };
-        if let Some(&idx) = index_map.get(&key) {
-            if let Event::ReceivedStage0Tasks(existing_ids) = &mut merged[idx]
-                && let Event::ReceivedStage0Tasks(new_ids) = &event
-            {
-                let existing_set: HashSet<StageId> = existing_ids.iter().cloned().collect();
-                for id in new_ids {
-                    if !existing_set.contains(id) {
-                        existing_ids.push(id.clone());
-                    }
+        match event {
+            Event::CheckJobCompleted(job_id) => {
+                if seen_check_jobs.insert(job_id.clone()) {
+                    merged.push(Event::CheckJobCompleted(job_id));
                 }
             }
-            // For CheckJobCompleted and CleanupJob, keep the first occurrence
-            // (already stored in merged[idx]).
-        } else {
-            index_map.insert(key, merged.len());
-            merged.push(event);
+            Event::CleanupJob(job_id) => {
+                if seen_cleanup_jobs.insert(job_id.clone()) {
+                    merged.push(Event::CleanupJob(job_id));
+                }
+            }
+            Event::ReceivedStage0Tasks(mut ids) => {
+                if !ids.is_empty() {
+                    stage0_ids.append(&mut ids);
+                }
+            }
         }
     }
+
+    if !stage0_ids.is_empty() {
+        merged.push(Event::ReceivedStage0Tasks(stage0_ids));
+    }
+
     merged
 }
 
@@ -129,14 +124,14 @@ impl EventHandler {
     async fn handle_events(&self, events: Vec<Event>) {
         let mut check_job_ids = Vec::new();
         let mut cleanup_job_ids = Vec::new();
-        let mut stage0_batches = Vec::new();
+        let mut all_stage0_ids = Vec::new();
 
         for event in events {
             debug!("Handling event: {event:?}");
             match event {
                 Event::CheckJobCompleted(job_id) => check_job_ids.push(job_id),
                 Event::CleanupJob(job_id) => cleanup_job_ids.push(job_id),
-                Event::ReceivedStage0Tasks(stage0_ids) => stage0_batches.push(stage0_ids),
+                Event::ReceivedStage0Tasks(stage0_ids) => all_stage0_ids.extend(stage0_ids),
             }
         }
 
@@ -170,44 +165,20 @@ impl EventHandler {
             });
         }
 
-        for stage0_ids in stage0_batches {
-            self.handle_received_stage0_tasks(stage0_ids).await;
+        if !all_stage0_ids.is_empty() {
+            let local_stages = self.local_stages.clone();
+            let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
+            let sender = self.sender.clone();
+            tokio::spawn(async move {
+                wait_stage0_tasks_polling(
+                    &local_stages,
+                    stage0_task_poll_timeout,
+                    &sender,
+                    all_stage0_ids,
+                )
+                .await
+            });
         }
-    }
-
-    async fn handle_received_stage0_tasks(&self, stage0_ids: Vec<StageId>) {
-        let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
-        let local_stages = self.local_stages.clone();
-        let sender = self.sender.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(stage0_task_poll_timeout).await;
-
-            let mut timeout_stage0_id = None;
-            {
-                let stages_guard = local_stages.lock();
-                for stage_id in stage0_ids {
-                    if let Some(stage) = stages_guard.get(&stage_id)
-                        && stage.never_executed()
-                    {
-                        debug!("Found stage0 {stage_id} never polled until timeout");
-                        timeout_stage0_id = Some(stage_id);
-                        break;
-                    }
-                }
-                drop(stages_guard);
-            }
-
-            if let Some(stage_id) = timeout_stage0_id
-                && let Err(e) =
-                    send_event_with_timeout(&sender, Event::CleanupJob(stage_id.job_id.clone()))
-                        .await
-            {
-                error!(
-                    "Failed to send CleanupJob event for job {}: {e}",
-                    stage_id.job_id
-                );
-            }
-        });
     }
 }
 
@@ -455,4 +426,33 @@ pub async fn cleanup_jobs(
         res?;
     }
     Ok(())
+}
+
+async fn wait_stage0_tasks_polling(
+    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
+    stage0_task_poll_timeout: Duration,
+    sender: &Sender<Event>,
+    stage0_ids: Vec<StageId>,
+) {
+    tokio::time::sleep(stage0_task_poll_timeout).await;
+
+    let mut timeout_job_ids = HashSet::new();
+    {
+        let stages_guard = local_stages.lock();
+        for stage_id in stage0_ids {
+            if let Some(stage) = stages_guard.get(&stage_id)
+                && stage.never_executed()
+            {
+                debug!("Found stage0 {stage_id} never polled until timeout");
+                timeout_job_ids.insert(stage_id.job_id.clone());
+            }
+        }
+        drop(stages_guard);
+    }
+
+    for job_id in timeout_job_ids {
+        if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await {
+            error!("Failed to send CleanupJob event for job {job_id}: {e}");
+        }
+    }
 }
