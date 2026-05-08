@@ -419,7 +419,7 @@ impl DistRuntime {
 #[derive(Debug)]
 pub struct StageState {
     pub stage_id: StageId,
-    pub create_at_ms: i64,
+    pub created_at_ms: i64,
     pub stage_plan: Arc<dyn ExecutionPlan>,
     /// Partitions assigned to this local node for execution.
     pub assigned_partitions: HashSet<usize>,
@@ -444,7 +444,7 @@ impl StageState {
         for (stage_id, assigned_task_ids) in stage_tasks {
             let stage_state = StageState {
                 stage_id: stage_id.clone(),
-                create_at_ms: timestamp_ms(),
+                created_at_ms: timestamp_ms(),
                 stage_plan: scheduled_tasks
                     .stage_plans
                     .get(&stage_id)
@@ -664,7 +664,7 @@ fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: A
             let mut guard = stages.lock();
             let mut to_cleanup = Vec::new();
             for (stage_id, stage_state) in guard.iter() {
-                let age_ms = timestamp_ms() - stage_state.create_at_ms;
+                let age_ms = timestamp_ms() - stage_state.created_at_ms;
                 if age_ms >= config.job_ttl.as_millis() as i64 {
                     to_cleanup.push(stage_id.clone());
                 }

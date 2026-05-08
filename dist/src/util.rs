@@ -1,12 +1,12 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use arrow::{
-    array::{RecordBatch, StringBuilder},
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    array::{RecordBatch, StringBuilder, TimestampMillisecondBuilder},
+    datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
     error::ArrowError,
 };
 use datafusion_common::ScalarValue;
@@ -15,13 +15,18 @@ use datafusion_physical_plan::{
     ExecutionPlan, placeholder_row::PlaceholderRowExec, projection::ProjectionExec,
 };
 use futures::{StreamExt, stream::BoxStream};
+use serde::Serialize;
 use tokio::{
     runtime::Handle,
     sync::mpsc::{Receiver, Sender},
     task::JoinSet,
 };
 
-use crate::{DistError, DistResult, network::StageInfo, planner::StageId};
+use crate::{
+    DistError, DistResult,
+    network::{StageInfo, TaskSetInfo},
+    planner::StageId,
+};
 
 /// Check if the physical plan is a simple `SELECT 1` query.
 /// This is used to identify queries that should be executed locally.
@@ -154,6 +159,12 @@ impl JobsArrowConverter {
     pub fn new() -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("job_id", DataType::Utf8, false),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new("job_meta", DataType::Utf8, false),
             Field::new("stages", DataType::Utf8, false),
         ]));
         Self { schema }
@@ -164,20 +175,44 @@ impl JobsArrowConverter {
     }
 
     pub fn convert(&self, jobs: &HashMap<StageId, StageInfo>) -> Result<RecordBatch, ArrowError> {
+        #[derive(Serialize)]
+        struct StagePayload {
+            assigned_partitions: HashSet<usize>,
+            task_set_infos: Vec<TaskSetInfo>,
+        }
+
         let mut grouped_jobs = BTreeMap::new();
         for (stage_id, stage_info) in jobs {
-            grouped_jobs
+            let (_, _, stages) = grouped_jobs
                 .entry(stage_id.job_id.clone())
-                .or_insert_with(BTreeMap::new)
-                .insert(stage_id.stage.to_string(), stage_info.clone());
+                .or_insert_with(|| {
+                    (
+                        stage_info.created_at_ms,
+                        stage_info.job_meta.clone(),
+                        BTreeMap::<String, StagePayload>::new(),
+                    )
+                });
+            stages.insert(
+                stage_id.stage.to_string(),
+                StagePayload {
+                    assigned_partitions: stage_info.assigned_partitions.clone(),
+                    task_set_infos: stage_info.task_set_infos.clone(),
+                },
+            );
         }
 
         let mut job_id_builder = StringBuilder::new();
+        let mut created_at_builder = TimestampMillisecondBuilder::new();
+        let mut job_meta_builder = StringBuilder::new();
         let mut stages_builder = StringBuilder::new();
 
-        for (job_id, stages) in grouped_jobs {
+        for (job_id, (created_at_ms, job_meta, stages)) in grouped_jobs {
             job_id_builder.append_value(job_id.as_ref());
-            let stages_json = serde_json::to_string(&stages)
+            created_at_builder.append_value(created_at_ms);
+            let job_meta_json = serde_json::to_string_pretty(job_meta.as_ref())
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+            job_meta_builder.append_value(job_meta_json);
+            let stages_json = serde_json::to_string_pretty(&stages)
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
             stages_builder.append_value(stages_json);
         }
@@ -186,6 +221,8 @@ impl JobsArrowConverter {
             self.schema.clone(),
             vec![
                 Arc::new(job_id_builder.finish()),
+                Arc::new(created_at_builder.finish()),
+                Arc::new(job_meta_builder.finish()),
                 Arc::new(stages_builder.finish()),
             ],
         )

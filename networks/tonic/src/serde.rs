@@ -67,7 +67,7 @@ pub fn parse_stage_info(proto: protobuf::StageInfo) -> StageInfo {
         .collect();
 
     StageInfo {
-        create_at_ms: proto.created_at_ms,
+        created_at_ms: proto.created_at_ms,
         assigned_partitions,
         task_set_infos,
         job_meta: Arc::new(proto.job_meta),
@@ -91,7 +91,7 @@ pub fn serialize_stage_info(stage_id: StageId, stage_info: StageInfo) -> protobu
 
     protobuf::StageInfo {
         stage_id: Some(proto_stage_id),
-        created_at_ms: stage_info.create_at_ms,
+        created_at_ms: stage_info.created_at_ms,
         assigned_partitions: proto_assigned_partitions,
         task_set_infos: proto_task_set_infos,
         job_meta: (*stage_info.job_meta).clone(),
