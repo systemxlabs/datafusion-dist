@@ -23,7 +23,7 @@ datafusion-dist-network-tonic = { path = "networks/tonic", version = "0.3.0" }
 datafusion-dist-integration-tests = { path = "integration-tests", version = "0.3.0" }
 
 arrow = "57"
-arrow-flight = "57"
+arrow-flight = "58"
 async-trait = "0.1"
 backon = "1.6"
 datafusion = "52"
