@@ -26,6 +26,7 @@ pub enum Event {
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
+const MAX_BATCH_SIZE: usize = 64;
 const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
@@ -49,6 +50,52 @@ pub async fn send_event_with_timeout(sender: &Sender<Event>, event: Event) -> Di
         .map_err(|e| DistError::internal(format!("Failed to send event: {e}")))
 }
 
+/// Merge duplicate events by `(job_id, event_kind)`.
+///
+/// - `CheckJobCompleted(JobId)` and `CleanupJob(JobId)` are deduplicated:
+///   only the first occurrence for a given `(job_id, event_kind)` is kept.
+/// - `ReceivedStage0Tasks(Vec<StageId>)` for the same job are merged into
+///   a single event whose `stage0_ids` preserves first-occurrence order
+///   (IDs from the first event keep their relative order; new IDs from
+///   subsequent events are appended in the order they first appear).
+/// - Empty `ReceivedStage0Tasks` vectors are silently skipped.
+fn merge_events(events: &mut Vec<Event>) -> Vec<Event> {
+    let mut merged: Vec<Event> = Vec::with_capacity(events.len());
+    let mut index_map: HashMap<(JobId, u8), usize> = HashMap::with_capacity(events.len());
+    for event in events.drain(..) {
+        let key = match &event {
+            Event::CheckJobCompleted(job_id) => (job_id.clone(), 0u8),
+            Event::CleanupJob(job_id) => (job_id.clone(), 1u8),
+            Event::ReceivedStage0Tasks(stage0_ids) => {
+                if stage0_ids.is_empty() {
+                    continue;
+                }
+                let job_id = stage0_ids[0].job_id.clone();
+                (job_id, 2u8)
+            }
+        };
+        if let Some(&idx) = index_map.get(&key) {
+            if let Event::ReceivedStage0Tasks(existing_ids) = &mut merged[idx] {
+                if let Event::ReceivedStage0Tasks(new_ids) = &event {
+                    let existing_set: HashSet<StageId> =
+                        existing_ids.iter().cloned().collect();
+                    for id in new_ids {
+                        if !existing_set.contains(id) {
+                            existing_ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+            // For CheckJobCompleted and CleanupJob, keep the first occurrence
+            // (already stored in merged[idx]).
+        } else {
+            index_map.insert(key, merged.len());
+            merged.push(event);
+        }
+    }
+    merged
+}
+
 pub fn start_event_handler(mut handler: EventHandler) {
     tokio::spawn(async move {
         handler.start().await;
@@ -67,47 +114,62 @@ pub struct EventHandler {
 
 impl EventHandler {
     pub async fn start(&mut self) {
-        while let Some(event) = self.receiver.recv().await {
-            debug!("Received event: {event:?}");
-            match event {
-                Event::CheckJobCompleted(job_id) => {
-                    let cluster = self.cluster.clone();
-                    let network = self.network.clone();
-                    let local_stages = self.local_stages.clone();
-                    let sender = self.sender.clone();
-                    tokio::spawn(async move {
-                        handle_check_job_completed(
-                            &cluster,
-                            &network,
-                            &local_stages,
-                            &sender,
-                            job_id,
-                        )
-                        .await;
-                    });
-                }
-                Event::CleanupJob(job_id) => {
-                    let local_node = self.local_node.clone();
-                    let cluster = self.cluster.clone();
-                    let network = self.network.clone();
-                    let local_stages = self.local_stages.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = cleanup_job(
-                            &local_node,
-                            &cluster,
-                            &network,
-                            &local_stages,
-                            job_id.clone(),
-                        )
-                        .await
-                        {
-                            error!("Failed to cleanup job {job_id}: {e}");
-                        }
-                    });
-                }
-                Event::ReceivedStage0Tasks(stage0_ids) => {
-                    self.handle_received_stage0_tasks(stage0_ids).await;
-                }
+        let mut batch = Vec::with_capacity(MAX_BATCH_SIZE);
+        loop {
+            batch.clear();
+            let received = self.receiver.recv_many(&mut batch, MAX_BATCH_SIZE).await;
+            if received == 0 {
+                break;
+            }
+            debug!("Received batch of {received} events, merging duplicates");
+            let merged = merge_events(&mut batch);
+            debug!("Merged into {} events", merged.len());
+            for event in merged {
+                self.handle_event(event).await;
+            }
+        }
+    }
+
+    async fn handle_event(&self, event: Event) {
+        debug!("Handling event: {event:?}");
+        match event {
+            Event::CheckJobCompleted(job_id) => {
+                let cluster = self.cluster.clone();
+                let network = self.network.clone();
+                let local_stages = self.local_stages.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    handle_check_job_completed(
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        &sender,
+                        job_id,
+                    )
+                    .await;
+                });
+            }
+            Event::CleanupJob(job_id) => {
+                let local_node = self.local_node.clone();
+                let cluster = self.cluster.clone();
+                let network = self.network.clone();
+                let local_stages = self.local_stages.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = cleanup_job(
+                        &local_node,
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        job_id.clone(),
+                    )
+                    .await
+                    {
+                        error!("Failed to cleanup job {job_id}: {e}");
+                    }
+                });
+            }
+            Event::ReceivedStage0Tasks(stage0_ids) => {
+                self.handle_received_stage0_tasks(stage0_ids).await;
             }
         }
     }
@@ -344,3 +406,4 @@ pub async fn cleanup_job(
     }
     Ok(())
 }
+
