@@ -75,14 +75,13 @@ fn merge_events(events: &mut Vec<Event>) -> Vec<Event> {
             }
         };
         if let Some(&idx) = index_map.get(&key) {
-            if let Event::ReceivedStage0Tasks(existing_ids) = &mut merged[idx] {
-                if let Event::ReceivedStage0Tasks(new_ids) = &event {
-                    let existing_set: HashSet<StageId> =
-                        existing_ids.iter().cloned().collect();
-                    for id in new_ids {
-                        if !existing_set.contains(id) {
-                            existing_ids.push(id.clone());
-                        }
+            if let Event::ReceivedStage0Tasks(existing_ids) = &mut merged[idx]
+                && let Event::ReceivedStage0Tasks(new_ids) = &event
+            {
+                let existing_set: HashSet<StageId> = existing_ids.iter().cloned().collect();
+                for id in new_ids {
+                    if !existing_set.contains(id) {
+                        existing_ids.push(id.clone());
                     }
                 }
             }
@@ -124,53 +123,57 @@ impl EventHandler {
             debug!("Received batch of {received} events, merging duplicates");
             let merged = merge_events(&mut batch);
             debug!("Merged into {} events", merged.len());
-            for event in merged {
-                self.handle_event(event).await;
-            }
+            self.handle_events(merged).await;
         }
     }
 
-    async fn handle_event(&self, event: Event) {
-        debug!("Handling event: {event:?}");
-        match event {
-            Event::CheckJobCompleted(job_id) => {
-                let cluster = self.cluster.clone();
-                let network = self.network.clone();
-                let local_stages = self.local_stages.clone();
-                let sender = self.sender.clone();
-                tokio::spawn(async move {
-                    handle_check_job_completed(
-                        &cluster,
-                        &network,
-                        &local_stages,
-                        &sender,
-                        job_id,
-                    )
+    async fn handle_events(&self, events: Vec<Event>) {
+        let mut check_job_ids = Vec::new();
+        let mut cleanup_job_ids = Vec::new();
+        let mut stage0_batches = Vec::new();
+
+        for event in events {
+            debug!("Handling event: {event:?}");
+            match event {
+                Event::CheckJobCompleted(job_id) => check_job_ids.push(job_id),
+                Event::CleanupJob(job_id) => cleanup_job_ids.push(job_id),
+                Event::ReceivedStage0Tasks(stage0_ids) => stage0_batches.push(stage0_ids),
+            }
+        }
+
+        for job_id in check_job_ids {
+            let cluster = self.cluster.clone();
+            let network = self.network.clone();
+            let local_stages = self.local_stages.clone();
+            let sender = self.sender.clone();
+            tokio::spawn(async move {
+                handle_check_job_completed(&cluster, &network, &local_stages, &sender, job_id)
                     .await;
-                });
-            }
-            Event::CleanupJob(job_id) => {
-                let local_node = self.local_node.clone();
-                let cluster = self.cluster.clone();
-                let network = self.network.clone();
-                let local_stages = self.local_stages.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = cleanup_job(
-                        &local_node,
-                        &cluster,
-                        &network,
-                        &local_stages,
-                        job_id.clone(),
-                    )
-                    .await
-                    {
-                        error!("Failed to cleanup job {job_id}: {e}");
-                    }
-                });
-            }
-            Event::ReceivedStage0Tasks(stage0_ids) => {
-                self.handle_received_stage0_tasks(stage0_ids).await;
-            }
+            });
+        }
+
+        if !cleanup_job_ids.is_empty() {
+            let local_node = self.local_node.clone();
+            let cluster = self.cluster.clone();
+            let network = self.network.clone();
+            let local_stages = self.local_stages.clone();
+            tokio::spawn(async move {
+                if let Err(e) = cleanup_jobs(
+                    &local_node,
+                    &cluster,
+                    &network,
+                    &local_stages,
+                    cleanup_job_ids.clone(),
+                )
+                .await
+                {
+                    error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
+                }
+            });
+        }
+
+        for stage0_ids in stage0_batches {
+            self.handle_received_stage0_tasks(stage0_ids).await;
         }
     }
 
@@ -348,62 +351,80 @@ pub fn local_stage_stats(
     result
 }
 
-pub async fn cleanup_job(
+pub async fn cleanup_jobs(
     local_node: &NodeId,
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: JobId,
+    job_ids: Vec<JobId>,
 ) -> DistResult<()> {
-    let alive_nodes = cluster.alive_nodes().await?;
-    let alive_set: HashSet<NodeId> = alive_nodes.keys().cloned().collect();
+    let alive_nodes: HashSet<NodeId> = cluster.alive_nodes().await?.keys().cloned().collect();
 
-    let target_nodes = {
+    let target_nodes_by_job = {
         let guard = local_stages.lock();
-        guard
-            .values()
-            .find(|stage| stage.stage_id.job_id == job_id)
-            .map(|stage| {
-                let mut nodes: HashSet<NodeId> =
-                    stage.job_task_distribution.values().cloned().collect();
-                nodes.insert(local_node.clone());
-                nodes
+        job_ids
+            .iter()
+            .cloned()
+            .map(|job_id| {
+                let target_nodes = guard
+                    .values()
+                    .find(|stage| stage.stage_id.job_id == job_id)
+                    .map(|stage| {
+                        stage
+                            .job_task_distribution
+                            .values()
+                            .cloned()
+                            .collect::<HashSet<_>>()
+                    });
+                (job_id, target_nodes)
             })
+            .collect::<Vec<_>>()
     };
 
-    let nodes_to_clean: HashSet<NodeId> = match target_nodes {
-        Some(nodes) if nodes.is_subset(&alive_set) => nodes,
-        Some(nodes) => {
-            let missing: Vec<_> = nodes.difference(&alive_set).collect();
-            warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive");
-            nodes
-                .into_iter()
-                .filter(|n| n == local_node || alive_set.contains(n))
-                .collect()
-        }
-        None => {
-            let mut nodes = alive_set;
-            nodes.insert(local_node.clone());
-            nodes
-        }
-    };
+    let mut jobs_by_node: HashMap<NodeId, Vec<JobId>> = HashMap::new();
+    for (job_id, target_nodes) in target_nodes_by_job {
+        let nodes_to_clean: HashSet<NodeId> = match target_nodes {
+            Some(nodes) if nodes.is_subset(&alive_nodes) => nodes,
+            Some(nodes) => {
+                let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
+                warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive");
+                nodes
+                    .into_iter()
+                    .filter(|n| alive_nodes.contains(n))
+                    .collect()
+            }
+            None => alive_nodes.clone(),
+        };
 
-    let mut futures = Vec::new();
-    for node_id in nodes_to_clean {
-        if &node_id == local_node {
-            let mut guard = local_stages.lock();
-            guard.retain(|stage_id, _| stage_id.job_id != job_id);
-        } else {
-            let network = network.clone();
-            let node_id = node_id.clone();
-            let job_id = job_id.clone();
-            futures.push(async move { network.cleanup_jobs(node_id, vec![job_id]).await });
+        for node_id in nodes_to_clean {
+            jobs_by_node
+                .entry(node_id)
+                .or_default()
+                .push(job_id.clone());
         }
     }
 
-    for res in join_all(futures).await {
-        res?;
+    if let Some(local_job_ids) = jobs_by_node.remove(local_node) {
+        let local_job_ids: HashSet<JobId> = local_job_ids.into_iter().collect();
+        let mut guard = local_stages.lock();
+        guard.retain(|stage_id, _| !local_job_ids.contains(&stage_id.job_id));
+    }
+
+    let mut futures = Vec::new();
+    for (node_id, job_ids) in jobs_by_node {
+        if !job_ids.is_empty() {
+            let network = network.clone();
+            futures.push(async move {
+                let result = network.cleanup_jobs(node_id.clone(), job_ids.clone()).await;
+                (node_id, job_ids, result)
+            });
+        }
+    }
+
+    for (node_id, job_ids, res) in join_all(futures).await {
+        if let Err(e) = res {
+            error!("Failed to cleanup jobs {job_ids:?} on node {node_id}: {e}")
+        }
     }
     Ok(())
 }
-
