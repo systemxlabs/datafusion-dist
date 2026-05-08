@@ -72,10 +72,9 @@ impl DistRuntime {
             status: status.clone(),
         };
 
-        let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(8 * 1024);
+        let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(config.event_queue_size);
 
         let event_handler = EventHandler {
-            local_node: node_id.clone(),
             config: config.clone(),
             cluster: cluster.clone(),
             network: network.clone(),
@@ -385,7 +384,6 @@ impl DistRuntime {
     }
 
     pub fn get_local_job_statuses(&self, job_ids: Vec<JobId>) -> HashMap<StageId, StageInfo> {
-        let job_ids: HashSet<JobId> = job_ids.into_iter().collect();
         local_stage_stats(&self.stages, Some(&job_ids))
     }
 

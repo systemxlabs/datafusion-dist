@@ -26,7 +26,7 @@ pub enum Event {
     ReceivedStage0Tasks(Vec<StageId>),
 }
 
-const MAX_BATCH_SIZE: usize = 64;
+const MAX_BATCH_SIZE: usize = 1024;
 const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
@@ -102,7 +102,6 @@ pub fn start_event_handler(mut handler: EventHandler) {
 }
 
 pub struct EventHandler {
-    pub local_node: NodeId,
     pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
@@ -141,31 +140,30 @@ impl EventHandler {
             }
         }
 
-        for job_id in check_job_ids {
+        if !check_job_ids.is_empty() {
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
             let sender = self.sender.clone();
             tokio::spawn(async move {
-                handle_check_job_completed(&cluster, &network, &local_stages, &sender, job_id)
-                    .await;
+                handle_check_jobs_completed(
+                    &cluster,
+                    &network,
+                    &local_stages,
+                    &sender,
+                    check_job_ids.clone(),
+                )
+                .await;
             });
         }
 
         if !cleanup_job_ids.is_empty() {
-            let local_node = self.local_node.clone();
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
             tokio::spawn(async move {
-                if let Err(e) = cleanup_jobs(
-                    &local_node,
-                    &cluster,
-                    &network,
-                    &local_stages,
-                    cleanup_job_ids.clone(),
-                )
-                .await
+                if let Err(e) =
+                    cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone()).await
                 {
                     error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
                 }
@@ -213,91 +211,124 @@ impl EventHandler {
     }
 }
 
-async fn handle_check_job_completed(
+async fn handle_check_jobs_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     sender: &Sender<Event>,
-    job_id: JobId,
+    job_ids: Vec<JobId>,
 ) {
-    match (|| async { check_job_completed(cluster, network, local_stages, job_id.clone()).await })
+    match (|| async { check_jobs_completed(cluster, network, local_stages, job_ids.clone()).await })
         .retry(job_check_retry_strategy())
         .await
     {
-        Ok(Some(true)) => {
-            debug!("Job {job_id} completed, remove it from cluster");
-            if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
-            {
-                error!("Failed to send cleanup job event for job {job_id}: {e}");
+        Ok(completed_map) => {
+            for (job_id, completed) in completed_map {
+                if completed {
+                    debug!("Job {job_id} completed, remove it from cluster");
+                    if let Err(e) =
+                        send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
+                    {
+                        error!("Failed to send cleanup job event for job {job_id}: {e}");
+                    }
+                }
             }
         }
-        Ok(_) => {}
         Err(err) => {
-            error!("Failed to check job {job_id} completed: {err}");
+            error!("Failed to check jobs {job_ids:?} completed: {err}");
         }
     }
 }
 
-pub async fn check_job_completed(
+pub async fn check_jobs_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_id: JobId,
-) -> DistResult<Option<bool>> {
-    let job_ids = HashSet::from([job_id.clone()]);
-
-    // First, get local status
-    let mut combined_status = local_stage_stats(local_stages, Some(&job_ids));
-
-    let local_node_id = network.local_node();
+    job_ids: Vec<JobId>,
+) -> DistResult<HashMap<JobId, bool>> {
+    if job_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
 
     // Get alive nodes for validation
-    let alive_nodes = cluster.alive_nodes().await?;
-    let alive_set: HashSet<NodeId> = alive_nodes.keys().cloned().collect();
+    let alive_nodes = cluster
+        .alive_nodes()
+        .await?
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
 
     // Determine target nodes from job_task_distribution if available
-    let target_nodes = {
+    let target_nodes_by_job = {
         let guard = local_stages.lock();
-        guard
-            .values()
-            .find(|stage| stage.stage_id.job_id == job_id)
-            .map(|stage| {
-                let mut nodes: HashSet<NodeId> =
-                    stage.job_task_distribution.values().cloned().collect();
-                nodes.remove(&local_node_id);
-                nodes
+        job_ids
+            .iter()
+            .cloned()
+            .map(|job_id| {
+                let target_nodes = guard
+                    .values()
+                    .find(|stage| stage.stage_id.job_id == job_id)
+                    .map(|stage| {
+                        stage
+                            .job_task_distribution
+                            .values()
+                            .cloned()
+                            .collect::<HashSet<_>>()
+                    });
+                (job_id, target_nodes)
             })
+            .collect::<Vec<_>>()
     };
 
-    let mut handles = Vec::new();
-    match target_nodes {
-        Some(nodes) if nodes.is_subset(&alive_set) => {
-            for node_id in nodes {
-                let network = network.clone();
-                let node_id = node_id.clone();
-                let job_id = job_id.clone();
-                let handle = tokio::spawn(async move {
-                    network.get_job_statuses(node_id, Some(vec![job_id])).await
-                });
-                handles.push(handle);
+    let mut completed_map = HashMap::with_capacity(job_ids.len());
+
+    let mut jobs_by_node: HashMap<NodeId, Vec<JobId>> = HashMap::new();
+    for (job_id, target_nodes) in target_nodes_by_job {
+        match target_nodes {
+            Some(nodes) if nodes.is_subset(&alive_nodes) => {
+                for node_id in nodes {
+                    jobs_by_node
+                        .entry(node_id)
+                        .or_default()
+                        .push(job_id.clone());
+                }
             }
-        }
-        Some(nodes) => {
-            let missing: Vec<_> = nodes.difference(&alive_set).collect();
-            warn!(
-                "Job {job_id} is polluted: task nodes {missing:?} are not alive, treat as completed"
-            );
-            return Ok(Some(true));
-        }
-        None => {
-            warn!("No job_task_distribution found for job {job_id}, skipping remote status check");
+            Some(nodes) => {
+                let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
+                warn!(
+                    "Job {job_id} is polluted: task nodes {missing:?} are not alive, treat as completed"
+                );
+                completed_map.insert(job_id, true);
+            }
+            None => {
+                warn!(
+                    "No job_task_distribution found for job {job_id}, skipping remote status check"
+                );
+            }
         }
     }
 
-    for handle in handles {
-        let remote_status = handle.await??;
+    let mut all_job_statuses = HashMap::new();
+
+    if let Some(local_job_ids) = jobs_by_node.remove(&network.local_node()) {
+        let local_job_statuses = local_stage_stats(local_stages, Some(&local_job_ids));
+        all_job_statuses.extend(local_job_statuses);
+    }
+
+    let mut futures = Vec::new();
+    for (node_id, job_ids) in jobs_by_node {
+        let network = network.clone();
+        futures.push(async move {
+            network
+                .get_job_statuses(node_id.clone(), Some(job_ids.clone()))
+                .await
+        });
+    }
+
+    for remote_status in join_all(futures).await {
+        let remote_status = remote_status?;
         for (stage_id, remote_stage_info) in remote_status {
-            combined_status
+            all_job_statuses
                 .entry(stage_id)
                 .and_modify(|existing| {
                     existing
@@ -311,32 +342,34 @@ pub async fn check_job_completed(
         }
     }
 
-    let stage0 = StageId {
-        job_id: job_id.clone(),
-        stage: 0,
-    };
-
-    let Some(stage0_info) = combined_status.get(&stage0) else {
-        return Ok(None);
-    };
-
-    // Check if all assigned partitions are completed
-    for partition in &stage0_info.assigned_partitions {
-        let is_completed = stage0_info
-            .task_set_infos
-            .iter()
-            .any(|ts| ts.dropped_partitions.contains_key(partition));
-        if !is_completed {
-            return Ok(Some(false));
+    for job_id in job_ids {
+        if completed_map.contains_key(&job_id) {
+            continue;
         }
+
+        let stage0 = StageId {
+            job_id: job_id.clone(),
+            stage: 0,
+        };
+
+        let job_completed = match all_job_statuses.get(&stage0) {
+            Some(stage0_info) => stage0_info.assigned_partitions.iter().all(|partition| {
+                stage0_info
+                    .task_set_infos
+                    .iter()
+                    .any(|ts| ts.dropped_partitions.contains_key(partition))
+            }),
+            None => true,
+        };
+        completed_map.insert(job_id, job_completed);
     }
 
-    Ok(Some(true))
+    Ok(completed_map)
 }
 
 pub fn local_stage_stats(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_ids: Option<&HashSet<JobId>>,
+    job_ids: Option<&Vec<JobId>>,
 ) -> HashMap<StageId, StageInfo> {
     let guard = stages.lock();
 
@@ -352,7 +385,6 @@ pub fn local_stage_stats(
 }
 
 pub async fn cleanup_jobs(
-    local_node: &NodeId,
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
@@ -404,7 +436,7 @@ pub async fn cleanup_jobs(
         }
     }
 
-    if let Some(local_job_ids) = jobs_by_node.remove(local_node) {
+    if let Some(local_job_ids) = jobs_by_node.remove(&network.local_node()) {
         let local_job_ids: HashSet<JobId> = local_job_ids.into_iter().collect();
         let mut guard = local_stages.lock();
         guard.retain(|stage_id, _| !local_job_ids.contains(&stage_id.job_id));
@@ -414,17 +446,13 @@ pub async fn cleanup_jobs(
     for (node_id, job_ids) in jobs_by_node {
         if !job_ids.is_empty() {
             let network = network.clone();
-            futures.push(async move {
-                let result = network.cleanup_jobs(node_id.clone(), job_ids.clone()).await;
-                (node_id, job_ids, result)
-            });
+            futures
+                .push(async move { network.cleanup_jobs(node_id.clone(), job_ids.clone()).await });
         }
     }
 
-    for (node_id, job_ids, res) in join_all(futures).await {
-        if let Err(e) = res {
-            error!("Failed to cleanup jobs {job_ids:?} on node {node_id}: {e}")
-        }
+    for res in join_all(futures).await {
+        res?;
     }
     Ok(())
 }

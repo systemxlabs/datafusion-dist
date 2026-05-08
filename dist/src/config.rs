@@ -6,6 +6,7 @@ pub struct DistConfig {
     pub stage0_task_poll_timeout: Duration,
     pub job_ttl: Duration,
     pub job_ttl_check_interval: Duration,
+    pub event_queue_size: usize,
 }
 
 impl DistConfig {
@@ -15,6 +16,7 @@ impl DistConfig {
             stage0_task_poll_timeout: Duration::from_secs(10),
             job_ttl: Duration::from_mins(30),
             job_ttl_check_interval: Duration::from_mins(5),
+            event_queue_size: 8 * 1024,
         }
     }
 }
