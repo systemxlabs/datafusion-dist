@@ -19,7 +19,7 @@ use serde::Serialize;
 use tokio::{
     runtime::Handle,
     sync::mpsc::{Receiver, Sender},
-    task::{AbortHandle, JoinSet},
+    task::{AbortHandle, JoinHandle},
 };
 
 use crate::{
@@ -67,7 +67,7 @@ pub fn get_local_ip() -> String {
 pub struct ReceiverStreamBuilder<O> {
     tx: Sender<DistResult<O>>,
     rx: Receiver<DistResult<O>>,
-    join_set: JoinSet<DistResult<()>>,
+    task: Option<JoinHandle<DistResult<()>>>,
 }
 
 impl<O: Send + 'static> ReceiverStreamBuilder<O> {
@@ -75,11 +75,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     pub fn new(capacity: usize) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(capacity);
 
-        Self {
-            tx,
-            rx,
-            join_set: JoinSet::new(),
-        }
+        Self { tx, rx, task: None }
     }
 
     /// Get a handle for sending data to the output
@@ -93,39 +89,34 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: Future<Output = DistResult<()>>,
         F: Send + 'static,
     {
-        self.join_set.spawn_on(task, handle)
+        assert!(
+            self.task.is_none(),
+            "ReceiverStreamBuilder supports a single task"
+        );
+        let join_handle = handle.spawn(task);
+        let abort_handle = join_handle.abort_handle();
+        self.task = Some(join_handle);
+        abort_handle
     }
 
     /// Create a stream of all data written to `tx`
     pub fn build(self) -> BoxStream<'static, DistResult<O>> {
-        let Self {
-            tx,
-            rx,
-            mut join_set,
-        } = self;
+        let Self { tx, rx, task } = self;
 
         // Doesn't need tx
         drop(tx);
 
-        // future that checks the result of the join set, and propagates panic if seen
+        // Future that checks the spawned task result, and propagates panic if seen.
         let check = async move {
-            while let Some(result) = join_set.join_next().await {
-                match result {
-                    Ok(task_result) => {
-                        match task_result {
-                            // Nothing to report
-                            Ok(_) => continue,
-                            // This means a blocking task error
-                            Err(error) => return Some(Err(error)),
-                        }
-                    }
-                    // This means a tokio task error, likely a panic
-                    Err(e) => {
-                        return Some(Err(DistError::internal(format!("Tokio join error: {e}"))));
-                    }
-                }
+            let Some(task) = task else {
+                return None;
+            };
+
+            match task.await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(Err(error)),
+                Err(e) => Some(Err(DistError::internal(format!("Tokio join error: {e}")))),
             }
-            None
         };
 
         let check_stream = futures::stream::once(check)
