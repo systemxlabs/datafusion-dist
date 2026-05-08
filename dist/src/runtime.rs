@@ -18,7 +18,7 @@ use datafusion_physical_plan::{
     stream::RecordBatchStreamAdapter,
 };
 
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
 use log::{debug, error, warn};
 use tokio::sync::mpsc::Sender;
 
@@ -26,7 +26,7 @@ use crate::{
     DistError, DistResult, JobId,
     cluster::{DistCluster, NodeId, NodeStatus},
     config::DistConfig,
-    event::{Event, EventHandler, local_stage_stats, send_event_with_timeout, start_event_handler},
+    event::{Event, EventHandler, local_jobs, send_event_with_timeout, start_event_handler},
     executor::{DefaultExecutor, DistExecutor, logging_executor_metrics},
     heartbeat::Heartbeater,
     network::{DistNetwork, ScheduledTasks, StageInfo},
@@ -379,58 +379,33 @@ impl DistRuntime {
         guard.retain(|stage_id, _| !job_ids.contains(&stage_id.job_id));
     }
 
-    pub fn get_local_job(&self, job_id: JobId) -> HashMap<StageId, StageInfo> {
-        self.get_local_job_statuses(vec![job_id])
-    }
-
-    pub fn get_local_job_statuses(&self, job_ids: Vec<JobId>) -> HashMap<StageId, StageInfo> {
-        local_stage_stats(&self.stages, Some(&job_ids))
-    }
-
-    pub fn get_local_jobs(&self) -> HashMap<JobId, HashMap<StageId, StageInfo>> {
-        let stage_stat = local_stage_stats(&self.stages, None);
-
-        let mut job_stats: HashMap<JobId, HashMap<StageId, StageInfo>> = HashMap::new();
-        for (stage_id, stage_info) in stage_stat {
-            job_stats
-                .entry(stage_id.job_id.clone())
-                .or_default()
-                .insert(stage_id, stage_info);
-        }
-
-        job_stats
+    pub fn get_local_jobs(&self, job_ids: Option<&Vec<JobId>>) -> HashMap<StageId, StageInfo> {
+        local_jobs(&self.stages, job_ids)
     }
 
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<JobId, HashMap<StageId, StageInfo>>> {
         // First, get local status for all jobs
-        let mut combined_status = local_stage_stats(&self.stages, None);
+        let mut combined_status = local_jobs(&self.stages, None);
 
         // Then, get status from all other alive nodes
         let node_states = self.cluster.alive_nodes().await?;
 
-        let mut handles = Vec::new();
+        let mut futures = Vec::new();
         for node_id in node_states.keys() {
             if *node_id != self.node_id {
                 let network = self.network.clone();
                 let node_id = node_id.clone();
-                let handle =
-                    tokio::spawn(async move { network.get_job_statuses(node_id, None).await });
-                handles.push(handle);
+                futures.push(async move { network.get_jobs(node_id, None).await });
             }
         }
 
-        for handle in handles {
-            let remote_status = handle.await??;
+        for remote_status in join_all(futures).await {
+            let remote_status = remote_status?;
             for (stage_id, remote_stage_info) in remote_status {
                 combined_status
                     .entry(stage_id)
                     .and_modify(|existing| {
-                        existing
-                            .assigned_partitions
-                            .extend(&remote_stage_info.assigned_partitions);
-                        existing
-                            .task_set_infos
-                            .extend(remote_stage_info.task_set_infos.clone());
+                        existing.merge(&remote_stage_info);
                     })
                     .or_insert(remote_stage_info);
             }

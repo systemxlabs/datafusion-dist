@@ -42,12 +42,12 @@ pub struct JobIds {
     pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetJobStatusReq {
+pub struct GetJobsReq {
     #[prost(message, optional, tag = "1")]
     pub job_ids: ::core::option::Option<JobIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetJobStatusResp {
+pub struct GetJobsResp {
     #[prost(message, repeated, tag = "1")]
     pub stage_infos: ::prost::alloc::vec::Vec<StageInfo>,
 }
@@ -82,12 +82,12 @@ pub struct TaskMetrics {
     pub completed: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CleanupJobReq {
+pub struct CleanupJobsReq {
     #[prost(string, repeated, tag = "1")]
     pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CleanupJobResp {}
+pub struct CleanupJobsResp {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistPhysicalPlanNode {
     #[prost(oneof = "dist_physical_plan_node::DistPhysicalPlanType", tags = "1")]
@@ -264,28 +264,25 @@ pub mod dist_tonic_service_client {
             ));
             self.inner.server_streaming(req, path, codec).await
         }
-        pub async fn get_job_statuses(
+        pub async fn get_jobs(
             &mut self,
-            request: impl tonic::IntoRequest<super::GetJobStatusReq>,
-        ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::GetJobsReq>,
+        ) -> std::result::Result<tonic::Response<super::GetJobsResp>, tonic::Status> {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/network_tonic.DistTonicService/GetJobStatuses",
-            );
+            let path =
+                http::uri::PathAndQuery::from_static("/network_tonic.DistTonicService/GetJobs");
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "network_tonic.DistTonicService",
-                "GetJobStatuses",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("network_tonic.DistTonicService", "GetJobs"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn cleanup_jobs(
             &mut self,
-            request: impl tonic::IntoRequest<super::CleanupJobReq>,
-        ) -> std::result::Result<tonic::Response<super::CleanupJobResp>, tonic::Status> {
+            request: impl tonic::IntoRequest<super::CleanupJobsReq>,
+        ) -> std::result::Result<tonic::Response<super::CleanupJobsResp>, tonic::Status> {
             self.inner.ready().await.map_err(|e| {
                 tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
             })?;
@@ -327,14 +324,14 @@ pub mod dist_tonic_service_server {
             &self,
             request: tonic::Request<super::TaskId>,
         ) -> std::result::Result<tonic::Response<Self::ExecuteTaskStream>, tonic::Status>;
-        async fn get_job_statuses(
+        async fn get_jobs(
             &self,
-            request: tonic::Request<super::GetJobStatusReq>,
-        ) -> std::result::Result<tonic::Response<super::GetJobStatusResp>, tonic::Status>;
+            request: tonic::Request<super::GetJobsReq>,
+        ) -> std::result::Result<tonic::Response<super::GetJobsResp>, tonic::Status>;
         async fn cleanup_jobs(
             &self,
-            request: tonic::Request<super::CleanupJobReq>,
-        ) -> std::result::Result<tonic::Response<super::CleanupJobResp>, tonic::Status>;
+            request: tonic::Request<super::CleanupJobsReq>,
+        ) -> std::result::Result<tonic::Response<super::CleanupJobsResp>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct DistTonicServiceServer<T> {
@@ -488,21 +485,19 @@ pub mod dist_tonic_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/network_tonic.DistTonicService/GetJobStatuses" => {
+                "/network_tonic.DistTonicService/GetJobs" => {
                     #[allow(non_camel_case_types)]
-                    struct GetJobStatusesSvc<T: DistTonicService>(pub Arc<T>);
-                    impl<T: DistTonicService> tonic::server::UnaryService<super::GetJobStatusReq>
-                        for GetJobStatusesSvc<T>
-                    {
-                        type Response = super::GetJobStatusResp;
+                    struct GetJobsSvc<T: DistTonicService>(pub Arc<T>);
+                    impl<T: DistTonicService> tonic::server::UnaryService<super::GetJobsReq> for GetJobsSvc<T> {
+                        type Response = super::GetJobsResp;
                         type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::GetJobStatusReq>,
+                            request: tonic::Request<super::GetJobsReq>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as DistTonicService>::get_job_statuses(&inner, request).await
+                                <T as DistTonicService>::get_jobs(&inner, request).await
                             };
                             Box::pin(fut)
                         }
@@ -513,7 +508,7 @@ pub mod dist_tonic_service_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = GetJobStatusesSvc(inner);
+                        let method = GetJobsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -532,12 +527,12 @@ pub mod dist_tonic_service_server {
                 "/network_tonic.DistTonicService/CleanupJobs" => {
                     #[allow(non_camel_case_types)]
                     struct CleanupJobsSvc<T: DistTonicService>(pub Arc<T>);
-                    impl<T: DistTonicService> tonic::server::UnaryService<super::CleanupJobReq> for CleanupJobsSvc<T> {
-                        type Response = super::CleanupJobResp;
+                    impl<T: DistTonicService> tonic::server::UnaryService<super::CleanupJobsReq> for CleanupJobsSvc<T> {
+                        type Response = super::CleanupJobsResp;
                         type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::CleanupJobReq>,
+                            request: tonic::Request<super::CleanupJobsReq>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {

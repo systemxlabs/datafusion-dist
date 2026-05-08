@@ -282,7 +282,7 @@ pub async fn check_jobs_completed(
     let mut all_job_statuses = HashMap::new();
 
     if let Some(local_job_ids) = jobs_by_node.remove(&network.local_node()) {
-        let local_job_statuses = local_stage_stats(local_stages, Some(&local_job_ids));
+        let local_job_statuses = local_jobs(local_stages, Some(&local_job_ids));
         all_job_statuses.extend(local_job_statuses);
     }
 
@@ -291,7 +291,7 @@ pub async fn check_jobs_completed(
         let network = network.clone();
         futures.push(async move {
             network
-                .get_job_statuses(node_id.clone(), Some(job_ids.clone()))
+                .get_jobs(node_id.clone(), Some(job_ids.clone()))
                 .await
         });
     }
@@ -302,12 +302,7 @@ pub async fn check_jobs_completed(
             all_job_statuses
                 .entry(stage_id)
                 .and_modify(|existing| {
-                    existing
-                        .assigned_partitions
-                        .extend(&remote_stage_info.assigned_partitions);
-                    existing
-                        .task_set_infos
-                        .extend(remote_stage_info.task_set_infos.clone());
+                    existing.merge(&remote_stage_info);
                 })
                 .or_insert(remote_stage_info);
         }
@@ -338,7 +333,7 @@ pub async fn check_jobs_completed(
     Ok(completed_map)
 }
 
-pub fn local_stage_stats(
+pub fn local_jobs(
     stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_ids: Option<&Vec<JobId>>,
 ) -> HashMap<StageId, StageInfo> {

@@ -27,7 +27,7 @@ pub trait DistNetwork: Debug + Send + Sync {
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream>;
 
-    async fn get_job_statuses(
+    async fn get_jobs(
         &self,
         node_id: NodeId,
         job_ids: Option<Vec<JobId>>,
@@ -88,6 +88,11 @@ impl StageInfo {
             task_set_infos,
             job_meta: stage_state.job_meta.clone(),
         }
+    }
+
+    pub fn merge(&mut self, other: &StageInfo) {
+        self.assigned_partitions.extend(&other.assigned_partitions);
+        self.task_set_infos.extend(other.task_set_infos.clone());
     }
 }
 

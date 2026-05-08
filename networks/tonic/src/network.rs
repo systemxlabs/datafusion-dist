@@ -228,7 +228,7 @@ impl DistNetwork for DistTonicNetwork {
         Ok(sendable_stream)
     }
 
-    async fn get_job_statuses(
+    async fn get_jobs(
         &self,
         node_id: NodeId,
         job_ids: Option<Vec<JobId>>,
@@ -238,10 +238,10 @@ impl DistNetwork for DistTonicNetwork {
             let job_ids = job_ids.clone().map(|job_ids| protobuf::JobIds {
                 job_ids: job_ids.into_iter().map(|id| id.to_string()).collect(),
             });
-            let req = protobuf::GetJobStatusReq { job_ids };
+            let req = protobuf::GetJobsReq { job_ids };
 
             let resp = tonic_client
-                .get_job_statuses(req)
+                .get_jobs(req)
                 .await
                 .map_err(|e| DistError::network(Box::new(e)))?
                 .into_inner();
@@ -267,7 +267,7 @@ impl DistNetwork for DistTonicNetwork {
     async fn cleanup_jobs(&self, node_id: NodeId, job_ids: Vec<JobId>) -> DistResult<()> {
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
-            let req = protobuf::CleanupJobReq {
+            let req = protobuf::CleanupJobsReq {
                 job_ids: job_ids.iter().map(|id| id.to_string()).collect(),
             };
 

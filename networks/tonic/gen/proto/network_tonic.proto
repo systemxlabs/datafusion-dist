@@ -9,8 +9,8 @@ import "arrow_flight.proto";
 service DistTonicService {
    rpc SendTasks (SendTasksReq) returns (SendTasksResp) {}
    rpc ExecuteTask (TaskId) returns (stream arrow_flight.FlightData) {}
-   rpc GetJobStatuses (GetJobStatusReq) returns (GetJobStatusResp) {}
-   rpc CleanupJobs (CleanupJobReq) returns (CleanupJobResp) {}
+   rpc GetJobs (GetJobsReq) returns (GetJobsResp) {}
+   rpc CleanupJobs (CleanupJobsReq) returns (CleanupJobsResp) {}
 }
 
 message SendTasksReq {
@@ -42,11 +42,11 @@ message JobIds {
   repeated string job_ids = 1;
 }
 
-message GetJobStatusReq {
+message GetJobsReq {
   optional JobIds job_ids = 1;
 }
 
-message GetJobStatusResp {
+message GetJobsResp {
   repeated StageInfo stage_infos = 1;
 }
 
@@ -69,11 +69,11 @@ message TaskMetrics {
   bool completed = 3;
 }
 
-message CleanupJobReq {
+message CleanupJobsReq {
   repeated string job_ids = 1;
 }
 
-message CleanupJobResp {}
+message CleanupJobsResp {}
 
 message DistPhysicalPlanNode {
   oneof DistPhysicalPlanType {

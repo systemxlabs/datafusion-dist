@@ -21,7 +21,7 @@ use tonic::{Request, Response, Status};
 use crate::{
     codec::DistPhysicalExtensionDecoder,
     protobuf::{
-        self, CleanupJobReq, CleanupJobResp, GetJobStatusReq, GetJobStatusResp, SendTasksReq,
+        self, CleanupJobsReq, CleanupJobsResp, GetJobsReq, GetJobsResp, SendTasksReq,
         SendTasksResp, StagePlan, dist_tonic_service_server::DistTonicService,
     },
     serde::{parse_stage_id, parse_task_distribution, parse_task_id, serialize_stage_info},
@@ -140,20 +140,16 @@ impl DistTonicService for DistTonicServer {
         Ok(Response::new(flight_data_stream))
     }
 
-    async fn get_job_statuses(
+    async fn get_jobs(
         &self,
-        request: Request<GetJobStatusReq>,
-    ) -> Result<Response<GetJobStatusResp>, Status> {
+        request: Request<GetJobsReq>,
+    ) -> Result<Response<GetJobsResp>, Status> {
         let req = request.into_inner();
         let status: HashMap<StageId, StageInfo> = if let Some(job_ids) = req.job_ids {
             self.runtime
-                .get_local_job_statuses(job_ids.job_ids.into_iter().map(Into::into).collect())
+                .get_local_jobs(Some(&job_ids.job_ids.into_iter().map(Into::into).collect()))
         } else {
-            self.runtime
-                .get_local_jobs()
-                .into_values()
-                .flatten()
-                .collect()
+            self.runtime.get_local_jobs(None)
         };
 
         let stage_infos = status
@@ -161,17 +157,17 @@ impl DistTonicService for DistTonicServer {
             .map(|(stage_id, stage_info)| serialize_stage_info(stage_id, stage_info))
             .collect();
 
-        Ok(Response::new(GetJobStatusResp { stage_infos }))
+        Ok(Response::new(GetJobsResp { stage_infos }))
     }
 
     async fn cleanup_jobs(
         &self,
-        request: Request<CleanupJobReq>,
-    ) -> Result<Response<CleanupJobResp>, Status> {
+        request: Request<CleanupJobsReq>,
+    ) -> Result<Response<CleanupJobsResp>, Status> {
         let job_ids = request.into_inner().job_ids;
         self.runtime
             .cleanup_local_jobs(job_ids.into_iter().map(Into::into).collect());
 
-        Ok(Response::new(CleanupJobResp {}))
+        Ok(Response::new(CleanupJobsResp {}))
     }
 }
