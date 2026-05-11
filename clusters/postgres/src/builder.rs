@@ -49,7 +49,7 @@ impl PostgresClusterBuilder {
             .port(self.port)
             .user(&self.user)
             .password(&self.password);
-        if let Some(dbname) = self.dbname {
+        if let Some(ref dbname) = self.dbname {
             config.dbname(dbname);
         }
         let manager = PostgresConnectionManager::new(config, NoTls);
@@ -59,7 +59,15 @@ impl PostgresClusterBuilder {
             .idle_timeout(self.pool_idle_timeout)
             .build(manager)
             .await
-            .map_err(|e| DistError::cluster(Box::new(PostgresClusterError::Connection(e))))?;
+            .map_err(|e| {
+                DistError::cluster(Box::new(PostgresClusterError::Connection {
+                    source: e,
+                    host: self.host.clone(),
+                    port: self.port,
+                    user: self.user.clone(),
+                    db_name: self.dbname.clone().unwrap_or_else(|| "(none)".to_string()),
+                }))
+            })?;
 
         let cluster = PostgresCluster {
             table: self.table,

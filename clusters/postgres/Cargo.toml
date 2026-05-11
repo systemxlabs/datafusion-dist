@@ -19,3 +19,6 @@ log.workspace = true
 bb8 = "0.9"
 bb8-postgres = "0.9"
 thiserror = "2.0.17"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

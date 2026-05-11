@@ -1445,6 +1445,7 @@ dependencies = [
  "log",
  "sysinfo",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
