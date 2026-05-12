@@ -134,8 +134,11 @@ from "public"."file_grid_original_44691_20260313152925290" group by id
 3 90 40 50 2
 
 # GROUP BY nullable column — NULL keys produce a distinct group
-query II rowsort
-select view_updated, count(*) from "public"."file_grid_original_44691_20260313152925290" group by view_updated
+# (Use explicit ORDER BY for deterministic compare; rowsort would sort lexically and
+# mix multi-digit ints, which is what we already cover in the rowsort cases above.)
+query II
+select view_updated, count(*) from "public"."file_grid_original_44691_20260313152925290"
+group by view_updated order by view_updated nulls last
 ----
 40 1
 50 1
