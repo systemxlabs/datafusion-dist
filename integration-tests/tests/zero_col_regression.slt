@@ -1,0 +1,99 @@
+# ============================================================
+# Zero-column RecordBatch regression — datafabric task #7/#10 follow-up
+# ------------------------------------------------------------
+# Fixture lives in `integration-tests/src/data.rs`:
+#
+#   - `zero_col_small` — 1 partition, 2 rows. Drives the small-table /
+#     single-task code path (historically: `dist/src/util.rs:113`
+#     assert_eq! on column counts when consolidating partial aggregates).
+#
+#   - `zero_col_large` — 4 partitions × 2 rows = 8 rows. Drives the
+#     repartition / coalesce path (historically: `arrow-select
+#     coalesce.rs:462` assert_eq! when feeding 0-column batches through
+#     `RepartitionExec` / `CoalescePartitionsExec`).
+#
+# Both tables deliberately leave `projection = Some(empty)` unnormalized
+# in `scan()`, so `SELECT COUNT(*)` against them emits a
+# 0-column / `row_count > 0` RecordBatch into the dist execution path.
+# This is the exact shape that the data-fabric fix `normalize_projection()`
+# (commit `6e7b30a3`) papered over on the TableProvider side. Running
+# these queries against dist is the regression guard for the dist side.
+#
+# These cases are gated and DO NOT run as part of the default
+# `cargo test` — see `tests/sqllogictest.rs` for the `#[ignore]` /
+# env-gated runner. Run with:
+#   `cargo test -p datafusion-dist-integration-tests \
+#      --test sqllogictest -- --ignored sqllogictest_zero_col_regression`
+# ============================================================
+
+# ------------------------------------------------------------
+# Small / single-partition path
+# ------------------------------------------------------------
+
+# COUNT(*) — lowers to `projection = Some(vec![])` in the optimizer,
+# which our custom provider leaves untouched. Expected: 2 rows.
+query I
+select count(*) from zero_col_small
+----
+2
+
+# SELECT * — projection `None`. Normal id column path, regression
+# sanity check that the provider can also serve a non-empty projection.
+query I rowsort
+select * from zero_col_small
+----
+0
+1
+
+# COUNT(*) with always-false WHERE — empty result through the same
+# empty-projection lowering.
+query I
+select count(*) from zero_col_small where id < 0
+----
+0
+
+# ------------------------------------------------------------
+# Multi-partition / repartition path
+# ------------------------------------------------------------
+
+# COUNT(*) across 4 partitions — partial aggregates each emit a
+# 0-column / row_count > 0 batch and then have to be re-shuffled and
+# coalesced through dist before the final aggregate runs.
+query I
+select count(*) from zero_col_large
+----
+8
+
+# Force hash join `Partitioned` mode so the planner re-partitions both
+# inputs even at small cardinalities. This puts the 0-column scan
+# upstream of an explicit `RepartitionExec` that goes through
+# `arrow-select coalesce`.
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+# COUNT(*) of a partitioned hash join over the zero-col fixture — the
+# repartition before the join consumes the 0-column scan stream.
+query I
+select count(*) from zero_col_large as a join zero_col_large as b on a.id = b.id
+----
+8
+
+# Restore defaults for any later cases.
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 1048576;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 131072;
+
+# ------------------------------------------------------------
+# Cross-table sanity — confirms that a zero-col scan being one
+# leg of a query doesn't poison adjacent batches from MemTable.
+# ------------------------------------------------------------
+
+query II
+select (select count(*) from zero_col_small) as zc, (select count(*) from simple) as s
+----
+2 2
