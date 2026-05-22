@@ -30,7 +30,7 @@ impl ExecutionPlan for UnresolvedExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.delegated_plan.properties()
     }
 

@@ -12,7 +12,7 @@ use datafusion_physical_plan::{
 use datafusion_proto::{
     convert_required,
     physical_plan::{
-        PhysicalExtensionCodec,
+        DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::serialize_physical_sort_exprs,
     },
@@ -56,6 +56,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
             let proto_partitioning = serialize_partitioning(
                 &exec.delegated_plan_properties.partitioning,
                 self.app_extension_codec.as_ref(),
+                &DefaultPhysicalProtoConverter,
             )?;
             let proto_output_ordering = exec
                 .delegated_plan_properties
@@ -69,6 +70,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
                             physical_sort_expr_nodes: serialize_physical_sort_exprs(
                                 ordering,
                                 self.app_extension_codec.as_ref(),
+                                &DefaultPhysicalProtoConverter,
                             )?,
                         },
                     )
@@ -150,6 +152,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                     ctx,
                     &delegated_plan_schema,
                     self.app_extension_codec.as_ref(),
+                    &DefaultPhysicalProtoConverter,
                 )?
                 .expect("partition is none");
                 let output_ordering = proto
@@ -161,6 +164,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                             ctx,
                             &delegated_plan_schema,
                             self.app_extension_codec.as_ref(),
+                            &DefaultPhysicalProtoConverter,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -179,7 +183,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                 let proxy_exec = ProxyExec {
                     delegated_stage_id,
                     delegated_plan_name: proto.delegated_plan_name,
-                    delegated_plan_properties,
+                    delegated_plan_properties: delegated_plan_properties.into(),
                     delegated_task_distribution,
                     runtime: self.runtime.clone(),
                 };
