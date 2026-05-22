@@ -22,7 +22,7 @@ use crate::{
 pub struct ProxyExec {
     pub delegated_stage_id: StageId,
     pub delegated_plan_name: String,
-    pub delegated_plan_properties: PlanProperties,
+    pub delegated_plan_properties: Arc<PlanProperties>,
     pub delegated_task_distribution: HashMap<TaskId, NodeId>,
     pub runtime: DistRuntime,
 }
@@ -66,7 +66,7 @@ impl ExecutionPlan for ProxyExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.delegated_plan_properties
     }
 
