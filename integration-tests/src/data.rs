@@ -25,7 +25,6 @@ pub fn build_session_context() -> SessionContext {
 
 pub fn register_tables(ctx: &SessionContext) {
     register_simple_table(ctx);
-    register_single_partition_table(ctx);
     register_file_grid_original_44691_table(ctx);
 }
 
@@ -55,26 +54,6 @@ pub fn register_simple_table(ctx: &SessionContext) {
 
     ctx.register_table("simple", Arc::new(table))
         .expect("Failed to register simple table");
-}
-
-/// Register a single-partition table to test RepartitionExec with
-/// input_partitions=1 and multiple output partitions.
-pub fn register_single_partition_table(ctx: &SessionContext) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("name", DataType::Utf8, false),
-        Field::new("age", DataType::Int32, false),
-    ]));
-
-    let names = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
-    let ages = Int32Array::from(vec![25, 30, 35]);
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(names), Arc::new(ages)])
-        .expect("Failed to create record batch");
-
-    let table = MemTable::try_new(schema, vec![vec![batch]])
-        .expect("Failed to create single-partition MemTable");
-
-    ctx.register_table("single_partition", Arc::new(table))
-        .expect("Failed to register single_partition table");
 }
 
 pub fn register_file_grid_original_44691_table(ctx: &SessionContext) {

@@ -432,29 +432,6 @@ pub struct StageState {
     pub job_meta: Arc<HashMap<String, String>>,
 }
 
-/// Recursively reset the state of a physical plan tree.
-///
-/// DataFusion's default `reset_state()` only resets the top-level node
-/// and clones children via `with_new_children()`, which does NOT recursively
-/// reset children's internal state. This can cause issues when the same
-/// plan tree is executed multiple times (e.g., multiple Flight endpoints
-/// fetching from the same distributed stage), because stateful operators
-/// like `RepartitionExec` retain consumed state across executions.
-///
-/// This function ensures every node in the plan tree gets its state reset.
-pub fn deep_reset_state(plan: Arc<dyn ExecutionPlan>) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    // First reset operator-specific state on the current node
-    let reset_plan = plan.reset_state()?;
-    // Then recursively deep-reset children
-    let children: Vec<_> = reset_plan
-        .children()
-        .into_iter()
-        .map(|c| deep_reset_state(Arc::clone(c)))
-        .collect::<datafusion_common::Result<Vec<_>>>()?;
-    // Reattach deep-reset children
-    reset_plan.with_new_children(children)
-}
-
 impl StageState {
     pub fn from_scheduled_tasks(
         scheduled_tasks: ScheduledTasks,
@@ -536,8 +513,7 @@ impl StageState {
         let task_set_id = Uuid::new_v4();
         let new_task_set = TaskSet {
             id: task_set_id,
-            shared_plan: deep_reset_state(self.stage_plan.clone())
-                .map_err(|e| DistError::internal(format!("Failed to deep reset plan state: {e}")))?,
+            shared_plan: self.stage_plan.clone().reset_state()?,
             running_partitions: HashMap::new(),
             dropped_partitions: HashMap::new(),
         };
