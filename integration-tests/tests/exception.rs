@@ -3,11 +3,13 @@ use std::{
     time::Duration,
 };
 
+use arrow::array::RecordBatch;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use datafusion_dist_integration_tests::{
     setup_containers,
     utils::{execute_flightsql_query, healthy_check_all_nodes},
 };
+use futures::TryStreamExt;
 use tonic::transport::Endpoint;
 
 #[tokio::test]
@@ -114,5 +116,49 @@ async fn cpu_intensive_task() -> Result<(), Box<dyn std::error::Error>> {
     health_thread_join_handle.join().unwrap().unwrap();
     cpu_thread_join_handle.join().unwrap().unwrap();
 
+    Ok(())
+}
+
+/// Test that fetching multiple endpoints sequentially from the same FlightInfo
+/// does not panic when the plan contains RepartitionExec with fewer input
+/// partitions than output partitions.
+///
+/// Regression test for: RepartitionExec "partition not used yet" panic
+/// when `reset_state()` does not recursively reset children's state.
+#[tokio::test]
+async fn multi_endpoint_repartition_reset_state() -> Result<(), Box<dyn std::error::Error>> {
+    setup_containers().await;
+
+    let endpoint = Endpoint::from_static("http://localhost:50061");
+    let channel = endpoint.connect().await?;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+    flight_sql_client.handshake("admin", "admin123").await?;
+
+    // Force partitioned hash join to create RepartitionExec with
+    // input_partitions=1 (single_partition table) and output_partitions=12
+    let sql =
+        "SELECT * FROM single_partition AS t1 JOIN single_partition AS t2 ON t1.name = t2.name";
+    let flight_info = flight_sql_client.execute(sql.to_string(), None).await?;
+
+    assert!(
+        flight_info.endpoint.len() > 1,
+        "Expected multiple endpoints, got {}",
+        flight_info.endpoint.len()
+    );
+    println!("FlightInfo has {} endpoints", flight_info.endpoint.len());
+
+    // Fetch endpoints sequentially (not concurrently) to verify that
+    // each endpoint can be consumed independently without state reuse panic.
+    let mut total_rows = 0;
+    for (i, ep) in flight_info.endpoint.iter().enumerate() {
+        let ticket = ep.ticket.as_ref().expect("ticket is required").clone();
+        let stream = flight_sql_client.do_get(ticket).await?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        println!("Endpoint {}: {} rows", i, rows);
+        total_rows += rows;
+    }
+
+    println!("Total rows across all endpoints: {}", total_rows);
     Ok(())
 }
