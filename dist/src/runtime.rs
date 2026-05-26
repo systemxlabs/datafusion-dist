@@ -15,7 +15,7 @@ use datafusion_common::DataFusionError;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::{
     ExecutionPlan, RecordBatchStream, display::DisplayableExecutionPlan,
-    stream::RecordBatchStreamAdapter,
+    execution_plan::reset_plan_states, stream::RecordBatchStreamAdapter,
 };
 
 use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
@@ -505,7 +505,7 @@ impl StageState {
         }
 
         for task_set in self.task_sets.iter_mut() {
-            if !task_set.never_executed(&partition) {
+            if task_set.never_executed(&partition) {
                 return Ok((task_set.id, task_set.shared_plan.clone()));
             }
         }
@@ -513,7 +513,8 @@ impl StageState {
         let task_set_id = Uuid::new_v4();
         let new_task_set = TaskSet {
             id: task_set_id,
-            shared_plan: self.stage_plan.clone().reset_state()?,
+            shared_plan: reset_plan_states(self.stage_plan.clone())
+                .map_err(|e| DistError::internal(format!("Failed to reset plan state: {e}")))?,
             running_partitions: HashMap::new(),
             dropped_partitions: HashMap::new(),
         };
