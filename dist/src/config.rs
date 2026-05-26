@@ -14,8 +14,8 @@ impl DistConfig {
         Self {
             heartbeat_interval: Duration::from_secs(20),
             stage0_task_poll_timeout: Duration::from_secs(10),
-            job_ttl: Duration::from_mins(30),
-            job_ttl_check_interval: Duration::from_mins(5),
+            job_ttl: Duration::from_secs(30 * 60),
+            job_ttl_check_interval: Duration::from_secs(5 * 60),
             event_queue_size: 8 * 1024,
         }
     }
