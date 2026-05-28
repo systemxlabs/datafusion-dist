@@ -530,7 +530,7 @@ impl StageState {
         }
 
         for task_set in self.task_sets.iter_mut() {
-            if !task_set.never_executed(&partition) {
+            if task_set.never_executed(&partition) {
                 return Ok((task_set.id, task_set.shared_plan.clone()));
             }
         }
