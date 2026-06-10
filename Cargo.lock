@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arrow 58.3.0",
  "async-trait",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist-cluster-postgres"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bb8",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist-integration-tests"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arrow-flight 58.3.0",
  "async-trait",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist-integration-tests-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arrow-flight 58.3.0",
  "async-trait",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist-network-tonic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arrow 58.3.0",
  "arrow-flight 58.3.0",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-dist-network-tonic-gen"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "tonic-prost-build",
 ]
