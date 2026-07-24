@@ -164,7 +164,7 @@ pub fn check_initial_stage_plans(
     // Collect all stage IDs that are depended upon by other stages
     let mut depended_stages: HashSet<StageId> = HashSet::new();
 
-    for (_, plan) in stage_plans.iter() {
+    for plan in stage_plans.values() {
         plan.apply(|node| {
             if let Some(unresolved) = node.downcast_ref::<UnresolvedExec>() {
                 depended_stages.insert(unresolved.delegated_stage_id.clone());
