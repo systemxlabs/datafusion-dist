@@ -147,10 +147,9 @@ pub fn contains_large_memory_datasource(plan: &Arc<dyn ExecutionPlan>, threshold
     let mut result = false;
 
     plan.apply(|node| {
-        if let Some(datasource) = node.as_any().downcast_ref::<DataSourceExec>()
+        if let Some(datasource) = node.downcast_ref::<DataSourceExec>()
             && let Some(memory) = datasource
                 .data_source()
-                .as_any()
                 .downcast_ref::<MemorySourceConfig>()
         {
             let size = memory
@@ -177,14 +176,13 @@ pub fn contains_large_memory_datasource(plan: &Arc<dyn ExecutionPlan>, threshold
 pub fn is_plan_fully_pipelined(plan: &Arc<dyn ExecutionPlan>) -> bool {
     let mut fully_pipelined = true;
     plan.apply(|node| {
-        let any = node.as_any();
-        if any.is::<RepartitionExec>()
-            || any.is::<CoalescePartitionsExec>()
-            || any.is::<NestedLoopJoinExec>()
+        if node.downcast_ref::<RepartitionExec>().is_some()
+            || node.downcast_ref::<CoalescePartitionsExec>().is_some()
+            || node.downcast_ref::<NestedLoopJoinExec>().is_some()
         {
             fully_pipelined = false;
         }
-        if let Some(hash_join) = any.downcast_ref::<HashJoinExec>()
+        if let Some(hash_join) = node.downcast_ref::<HashJoinExec>()
             && hash_join.partition_mode() == &PartitionMode::CollectLeft
         {
             fully_pipelined = false;

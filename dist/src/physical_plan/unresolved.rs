@@ -26,10 +26,6 @@ impl ExecutionPlan for UnresolvedExec {
         "UnresolvedExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         self.delegated_plan.properties()
     }

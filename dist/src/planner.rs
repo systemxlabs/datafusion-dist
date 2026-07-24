@@ -129,12 +129,12 @@ impl DistPlanner for DefaultPlanner {
 }
 
 pub fn is_plan_children_can_be_stages(plan: &dyn ExecutionPlan) -> bool {
-    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+    if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         matches!(hash_join.partition_mode(), PartitionMode::Partitioned)
     } else if plan.children().len() == 1 {
-        if let Some(agg) = plan.children()[0].as_any().downcast_ref::<AggregateExec>() {
+        if let Some(agg) = plan.children()[0].downcast_ref::<AggregateExec>() {
             matches!(agg.mode(), AggregateMode::Partial)
-        } else if let Some(sort) = plan.children()[0].as_any().downcast_ref::<SortExec>() {
+        } else if let Some(sort) = plan.children()[0].downcast_ref::<SortExec>() {
             sort.preserve_partitioning()
         } else {
             false
@@ -166,7 +166,7 @@ pub fn check_initial_stage_plans(
 
     for (_, plan) in stage_plans.iter() {
         plan.apply(|node| {
-            if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
+            if let Some(unresolved) = node.downcast_ref::<UnresolvedExec>() {
                 depended_stages.insert(unresolved.delegated_stage_id.clone());
             }
             Ok(TreeNodeRecursion::Continue)
@@ -192,7 +192,7 @@ pub fn resolve_stage_plan(
     runtime: DistRuntime,
 ) -> DistResult<Arc<dyn ExecutionPlan>> {
     let transformed = stage_plan.transform(|node| {
-        if let Some(unresolved) = node.as_any().downcast_ref::<UnresolvedExec>() {
+        if let Some(unresolved) = node.downcast_ref::<UnresolvedExec>() {
             let proxy =
                 ProxyExec::try_from_unresolved(unresolved, task_distribution, runtime.clone())?;
             Ok(Transformed::yes(Arc::new(proxy)))

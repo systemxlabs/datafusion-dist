@@ -12,7 +12,7 @@ use datafusion_physical_plan::{
 use datafusion_proto::{
     convert_required,
     physical_plan::{
-        DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+        DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::serialize_physical_sort_exprs,
     },
@@ -51,12 +51,12 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        if let Some(exec) = node.as_any().downcast_ref::<ProxyExec>() {
+        if let Some(exec) = node.downcast_ref::<ProxyExec>() {
             let proto_stage_id = serialize_stage_id(exec.delegated_stage_id.clone());
             let proto_partitioning = serialize_partitioning(
                 &exec.delegated_plan_properties.partitioning,
                 self.app_extension_codec.as_ref(),
-                &DefaultPhysicalProtoConverter,
+                &DefaultPhysicalProtoConverter {},
             )?;
             let proto_output_ordering = exec
                 .delegated_plan_properties
@@ -70,7 +70,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
                             physical_sort_expr_nodes: serialize_physical_sort_exprs(
                                 ordering,
                                 self.app_extension_codec.as_ref(),
-                                &DefaultPhysicalProtoConverter,
+                                &DefaultPhysicalProtoConverter {},
                             )?,
                         },
                     )
@@ -147,12 +147,13 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                         .expect("task_distribution is none"),
                 );
                 let delegated_plan_schema: SchemaRef = Arc::new(convert_required!(proto.schema)?);
+                let decode_ctx =
+                    PhysicalPlanDecodeContext::new(ctx, self.app_extension_codec.as_ref());
                 let partitioning = parse_protobuf_partitioning(
                     proto.partitioning.as_ref(),
-                    ctx,
+                    &decode_ctx,
                     &delegated_plan_schema,
-                    self.app_extension_codec.as_ref(),
-                    &DefaultPhysicalProtoConverter,
+                    &DefaultPhysicalProtoConverter {},
                 )?
                 .expect("partition is none");
                 let output_ordering = proto
@@ -161,10 +162,9 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
                     .map(|ordering| {
                         parse_physical_sort_exprs(
                             &ordering.physical_sort_expr_nodes,
-                            ctx,
+                            &decode_ctx,
                             &delegated_plan_schema,
-                            self.app_extension_codec.as_ref(),
-                            &DefaultPhysicalProtoConverter,
+                            &DefaultPhysicalProtoConverter {},
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;

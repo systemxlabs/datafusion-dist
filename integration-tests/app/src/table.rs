@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::{
@@ -28,10 +28,6 @@ impl RunningJobsTable {
 
 #[async_trait]
 impl TableProvider for RunningJobsTable {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.converter.schema().clone()
     }

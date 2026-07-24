@@ -62,10 +62,6 @@ impl ExecutionPlan for ProxyExec {
         "ProxyExec"
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.delegated_plan_properties
     }
