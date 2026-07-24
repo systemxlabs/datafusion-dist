@@ -174,7 +174,7 @@ impl DistRuntime {
         }
 
         // Resolve stage plans based on task distribution
-        for (_, stage_plan) in stage_plans.iter_mut() {
+        for stage_plan in stage_plans.values_mut() {
             *stage_plan = resolve_stage_plan(stage_plan.clone(), &task_distribution, self.clone())?;
         }
         debug!(

@@ -31,17 +31,17 @@ use crate::{
 /// Check if the physical plan is a simple `SELECT 1` query.
 /// This is used to identify queries that should be executed locally.
 pub fn is_plan_select_1(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() else {
+    let Some(proj) = plan.downcast_ref::<ProjectionExec>() else {
         return false;
     };
-    if !proj.input().as_any().is::<PlaceholderRowExec>() {
+    if proj.input().downcast_ref::<PlaceholderRowExec>().is_none() {
         return false;
     }
     if proj.expr().len() != 1 {
         return false;
     }
     let expr = &proj.expr()[0];
-    let Some(literal) = expr.expr.as_any().downcast_ref::<Literal>() else {
+    let Some(literal) = expr.expr.downcast_ref::<Literal>() else {
         return false;
     };
     matches!(
