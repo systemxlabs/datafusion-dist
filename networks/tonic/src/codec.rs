@@ -13,6 +13,7 @@ use datafusion_proto::{
     convert_required,
     physical_plan::{
         DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
+        PhysicalProtoConverterExtension,
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::serialize_physical_sort_exprs,
     },
@@ -40,6 +41,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         Err(DataFusionError::NotImplemented(
             "DistPhysicalExtensionEncoder::try_decode is not implemented".to_string(),
@@ -50,6 +52,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionEncoder {
         &self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<(), DataFusionError> {
         if let Some(exec) = node.downcast_ref::<ProxyExec>() {
             let proto_stage_id = serialize_stage_id(exec.delegated_stage_id.clone());
@@ -123,6 +126,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let dist_node = DistPhysicalPlanNode::decode(buf).map_err(|e| {
             DataFusionError::Internal(format!("Failed to decode dist physical plan node: {e:?}"))
@@ -197,6 +201,7 @@ impl PhysicalExtensionCodec for DistPhysicalExtensionDecoder {
         &self,
         _node: Arc<dyn ExecutionPlan>,
         _buf: &mut Vec<u8>,
+        _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<(), DataFusionError> {
         Err(DataFusionError::NotImplemented(
             "DistPhysicalExtensionDecoder::try_encode is not implemented".to_string(),

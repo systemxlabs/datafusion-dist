@@ -1,8 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, tree_node::TreeNodeRecursion};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::PhysicalExpr;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     stream::RecordBatchStreamAdapter,
@@ -68,6 +69,13 @@ impl ExecutionPlan for ProxyExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
