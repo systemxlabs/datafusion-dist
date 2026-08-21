@@ -6,7 +6,7 @@ use std::{
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties,
+    ChildrenPropertiesMode, ExecutionPlan, ExecutionPlanProperties, ReplaceChildrenOptions,
     aggregates::{AggregateExec, AggregateMode},
     display::DisplayableExecutionPlan,
     joins::{HashJoinExec, PartitionMode},
@@ -110,7 +110,10 @@ impl DistPlanner for DefaultPlanner {
                         let new_child = UnresolvedExec::new(stage_id, child.clone());
                         new_children.push(Arc::new(new_child) as Arc<dyn ExecutionPlan>);
                     }
-                    let new_plan = node.with_new_children(new_children)?;
+                    let new_plan = node.replace_children(
+                        new_children,
+                        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                    )?;
                     Ok(Transformed::yes(new_plan))
                 } else {
                     Ok(Transformed::no(node))
