@@ -1,10 +1,11 @@
 pub mod data;
 pub mod docker;
+pub mod ticket;
 pub mod utils;
 
 use std::sync::OnceLock;
 
-use crate::{docker::DockerCompose, utils::execute_flightsql_query};
+use crate::{docker::DockerCompose, utils::healthy_check_all_nodes};
 
 static CONTAINERS: OnceLock<DockerCompose> = OnceLock::new();
 
@@ -18,10 +19,14 @@ pub async fn setup_containers() {
 
     let mut retry = 0;
     loop {
-        match execute_flightsql_query("select 1").await {
-            Ok(_) => break,
+        // Every node must be up before tests run queries: nodes register
+        // themselves in the cluster with a heartbeat, and a query submitted
+        // while some of them are still missing is only scheduled on the nodes
+        // that are alive at that moment.
+        match healthy_check_all_nodes().await {
+            Ok(()) => break,
             Err(err) => {
-                eprintln!("flightsql healthy check (select 1) failed: {err:?}");
+                eprintln!("cluster healthy check failed: {err:?}");
             }
         }
         retry += 1;

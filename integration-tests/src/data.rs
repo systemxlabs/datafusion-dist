@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
 
 use datafusion::{
     arrow::{
@@ -9,23 +12,78 @@ use datafusion::{
     common::Result as DFResult,
     datasource::MemTable,
     logical_expr::{ColumnarValue, Volatility},
-    prelude::{SessionConfig, SessionContext, create_udf},
+    prelude::{CsvReadOptions, SessionConfig, SessionContext, create_udf},
 };
 
-pub fn build_session_context() -> SessionContext {
+pub async fn build_session_context() -> SessionContext {
     let config = SessionConfig::new().with_target_partitions(12).set_bool(
         "datafusion.optimizer.enable_join_dynamic_filter_pushdown",
         false,
     );
     let ctx = SessionContext::new_with_config(config);
-    register_tables(&ctx);
+    register_tables(&ctx).await;
     register_udfs(&ctx);
     ctx
 }
 
-pub fn register_tables(ctx: &SessionContext) {
+pub async fn register_tables(ctx: &SessionContext) {
     register_simple_table(ctx);
     register_file_grid_original_44691_table(ctx);
+    register_csv_dir_table(ctx).await;
+}
+
+/// Files of the `csv_dir` table: `(file name, rows)`.
+///
+/// A directory scan has one partition per file, so this is a multi partition
+/// file source. Every node builds its session context on startup, so each node
+/// materializes its own copy of these files inside its container.
+const CSV_DIR_FILES: [(&str, &[(i64, &str)]); 3] = [
+    ("part1.csv", &[(1, "a")]),
+    ("part2.csv", &[(2, "b"), (3, "c")]),
+    ("part3.csv", &[(4, "d"), (5, "e"), (6, "f")]),
+];
+
+/// Rows of the `csv_dir` table, as `select id, name from csv_dir` returns them.
+pub fn csv_dir_rows() -> Vec<(i64, String)> {
+    CSV_DIR_FILES
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().map(|(id, name)| (*id, name.to_string())))
+        .collect()
+}
+
+/// Directory of the `csv_dir` fixture.
+///
+/// The files are written once per process: registering a scan infers the schema
+/// by reading the files, so rewriting them while another test registers the
+/// table could make that one read a partially written file.
+fn csv_dir_path() -> &'static Path {
+    static CSV_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+    CSV_DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("datafusion-dist-integration-tests/csv_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("Failed to create csv_dir");
+        for (name, rows) in CSV_DIR_FILES {
+            let mut contents = String::from("id,name\n");
+            for (id, name) in rows {
+                contents.push_str(&format!("{id},{name}\n"));
+            }
+            std::fs::write(dir.join(name), contents).expect("Failed to write csv part");
+        }
+        dir
+    })
+}
+
+async fn register_csv_dir_table(ctx: &SessionContext) {
+    ctx.register_csv(
+        "csv_dir",
+        csv_dir_path()
+            .to_str()
+            .expect("csv_dir path is not valid utf8"),
+        CsvReadOptions::new(),
+    )
+    .await
+    .expect("Failed to register csv_dir table");
 }
 
 pub fn register_udfs(ctx: &SessionContext) {

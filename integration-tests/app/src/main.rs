@@ -10,7 +10,7 @@ use arrow_flight::{
     encode::FlightDataEncoderBuilder,
     error::FlightError,
     flight_service_server::{FlightService, FlightServiceServer},
-    sql::{Any, CommandStatementQuery, ProstMessageExt, SqlInfo, server::FlightSqlService},
+    sql::{Any, CommandStatementQuery, SqlInfo, server::FlightSqlService},
 };
 use datafusion::{
     arrow::ipc::writer::IpcWriteOptions,
@@ -22,7 +22,7 @@ use datafusion_dist::{
     scheduler::DefaultScheduler, util::is_plan_select_1,
 };
 use datafusion_dist_cluster_postgres::PostgresClusterBuilder;
-use datafusion_dist_integration_tests::data::build_session_context;
+use datafusion_dist_integration_tests::{data::build_session_context, ticket::NodeTask};
 use datafusion_dist_network_tonic::{
     network::DistTonicNetwork, protobuf::dist_tonic_service_server::DistTonicServiceServer,
     server::DistTonicServer,
@@ -30,7 +30,6 @@ use datafusion_dist_network_tonic::{
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
-use prost::Message;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
 use uuid::Uuid;
 
@@ -48,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let network = DistTonicNetwork::new(port, app_extension_codec.clone());
 
-    let ctx = build_session_context();
+    let ctx = build_session_context().await;
 
     let config = DistConfig::default()
         .with_job_ttl(Duration::from_secs(60))
@@ -128,33 +127,6 @@ fn build_dist_scheduler() -> DefaultScheduler {
 struct TestFlightSqlService {
     ctx: SessionContext,
     runtime: DistRuntime,
-}
-
-#[derive(::prost::Message)]
-pub struct NodeTask {
-    #[prost(string, tag = "1")]
-    pub host: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "2")]
-    pub port: u32,
-    #[prost(string, tag = "3")]
-    pub job_id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "4")]
-    pub stage: u32,
-    #[prost(uint32, tag = "5")]
-    pub partition: u32,
-}
-
-impl arrow_flight::sql::ProstMessageExt for NodeTask {
-    fn type_url() -> &'static str {
-        "type.googleapis.com/arrow.flight.protocol.sql.NodeTask"
-    }
-
-    fn as_any(&self) -> arrow_flight::sql::Any {
-        arrow_flight::sql::Any {
-            type_url: NodeTask::type_url().to_string(),
-            value: self.encode_to_vec().into(),
-        }
-    }
 }
 
 type BoxedFlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -313,18 +285,8 @@ impl FlightSqlService for TestFlightSqlService {
 fn build_flight_endpoints(task_distribution: HashMap<TaskId, NodeId>) -> Vec<FlightEndpoint> {
     let mut endpoints = Vec::new();
     for (task_id, node_id) in task_distribution {
-        let node_task = NodeTask {
-            host: node_id.host,
-            port: node_id.port as u32,
-            job_id: task_id.job_id.to_string(),
-            stage: task_id.stage,
-            partition: task_id.partition,
-        };
-        let buf = node_task.as_any().encode_to_vec();
-        let ticket = Ticket { ticket: buf.into() };
-
-        let endpoint = FlightEndpoint::new().with_ticket(ticket);
-        endpoints.push(endpoint);
+        let ticket = NodeTask::new(&node_id, &task_id).to_ticket();
+        endpoints.push(FlightEndpoint::new().with_ticket(ticket));
     }
     endpoints
 }

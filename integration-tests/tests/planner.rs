@@ -98,7 +98,7 @@ HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(name@0, name@0)]
 
 #[tokio::test]
 async fn hash_join_partitioned() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = build_session_context();
+    let ctx = build_session_context().await;
     {
         let state = ctx.state_ref();
         let mut state = state.write();
