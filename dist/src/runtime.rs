@@ -42,6 +42,7 @@ use crate::{
 pub struct DistRuntime {
     pub node_id: NodeId,
     pub status: Arc<Mutex<NodeStatus>>,
+    /// Task context used to execute stage partitions, see [`stage_task_ctx`].
     pub task_ctx: Arc<TaskContext>,
     pub config: Arc<DistConfig>,
     pub cluster: Arc<dyn DistCluster>,
@@ -87,7 +88,7 @@ impl DistRuntime {
         Self {
             node_id: network.local_node(),
             status,
-            task_ctx,
+            task_ctx: stage_task_ctx(task_ctx),
             config,
             cluster,
             network,
@@ -415,6 +416,43 @@ impl DistRuntime {
 
         Ok(combined_status)
     }
+}
+
+/// Builds the [`TaskContext`] used to execute stage partitions on this node.
+///
+/// DataFusion's file stream work stealing lets the partitions of one scan
+/// instance rebalance unopened files among themselves at runtime. A distributed
+/// stage runs every partition as an isolated task that never polls its
+/// siblings, so the partitions executed by a node would read the files of the
+/// other nodes and duplicate rows. DataFusion documents that executors which
+/// run each partition as an isolated task should turn work stealing off, so a
+/// task partition only reads its own file group.
+fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
+    if !task_ctx
+        .session_config()
+        .options()
+        .execution
+        .enable_file_stream_work_stealing
+    {
+        return task_ctx;
+    }
+
+    let mut session_config = task_ctx.session_config().clone();
+    session_config
+        .options_mut()
+        .execution
+        .enable_file_stream_work_stealing = false;
+
+    Arc::new(TaskContext::new(
+        task_ctx.task_id(),
+        task_ctx.session_id(),
+        session_config,
+        task_ctx.scalar_functions().clone(),
+        task_ctx.higher_order_functions().clone(),
+        task_ctx.aggregate_functions().clone(),
+        task_ctx.window_functions().clone(),
+        task_ctx.runtime_env(),
+    ))
 }
 
 /// Tracks the runtime state of a single execution stage on the local node.
