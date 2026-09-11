@@ -88,7 +88,7 @@ pub async fn assert_planner(
     expected_plan: &str,
     expected_stage_plans: &str,
 ) -> HashMap<StageId, Arc<dyn ExecutionPlan>> {
-    let ctx = build_session_context();
+    let ctx = build_session_context().await;
     let plan = ctx
         .sql(sql)
         .await
