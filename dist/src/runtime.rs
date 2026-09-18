@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -115,7 +118,7 @@ impl DistRuntime {
 
     pub async fn start(&self) {
         self.heartbeater.start();
-        start_job_cleaner(self.stages.clone(), self.config.clone());
+        start_stage_cleaner(self.stages.clone(), self.config.clone());
     }
 
     pub async fn shutdown(&self) {
@@ -260,6 +263,7 @@ impl DistRuntime {
             .ok_or_else(|| DistError::internal(format!("Stage {stage_id} not found")))?;
         let (task_set_id, plan) = stage_state.get_plan(task_id.partition as usize)?;
         let schema = plan.schema();
+        let last_active_ms = stage_state.last_active_ms.clone();
 
         let mut receiver_stream_builder = ReceiverStreamBuilder::new(2);
 
@@ -270,6 +274,8 @@ impl DistRuntime {
             let mut df_stream = plan.execute(partition, task_ctx)?;
 
             while let Some(batch) = df_stream.next().await {
+                // Producing a batch means the task is still making progress.
+                last_active_ms.store(timestamp_ms(), Ordering::Relaxed);
                 let batch = batch.map_err(DistError::from);
                 match tx.send(batch).await {
                     Ok(()) => {}
@@ -460,6 +466,11 @@ fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
 pub struct StageState {
     pub stage_id: StageId,
     pub created_at_ms: i64,
+    /// Timestamp (ms) of the last observed progress of this stage: a task of the
+    /// stage was created, started, completed, or produced an output batch.
+    /// Shared with the running task drivers so they can report progress without
+    /// taking the stages lock.
+    pub last_active_ms: Arc<AtomicI64>,
     pub stage_plan: Arc<dyn ExecutionPlan>,
     /// Partitions assigned to this local node for execution.
     pub assigned_partitions: HashSet<usize>,
@@ -485,6 +496,7 @@ impl StageState {
             let stage_state = StageState {
                 stage_id: stage_id.clone(),
                 created_at_ms: timestamp_ms(),
+                last_active_ms: Arc::new(AtomicI64::new(timestamp_ms())),
                 stage_plan: scheduled_tasks
                     .stage_plans
                     .get(&stage_id)
@@ -510,6 +522,22 @@ impl StageState {
             .iter()
             .map(|task_set| task_set.running_partitions.len())
             .sum()
+    }
+
+    /// Records that the stage made progress now.
+    pub fn update_last_active(&self) {
+        self.last_active_ms.store(timestamp_ms(), Ordering::Relaxed);
+    }
+
+    pub fn last_active_ms(&self) -> i64 {
+        self.last_active_ms.load(Ordering::Relaxed)
+    }
+
+    /// Returns true if the stage has running tasks, but none of them has made
+    /// progress for `inactivity_ms`. Stages without running tasks (never polled
+    /// yet, or already finished) are not considered inactive.
+    pub fn is_inactive(&self, now_ms: i64, inactivity_ms: i64) -> bool {
+        self.num_running_tasks() > 0 && now_ms - self.last_active_ms() >= inactivity_ms
     }
 
     pub fn num_pending_tasks(&self) -> usize {
@@ -541,6 +569,8 @@ impl StageState {
                 "Task {task_id} not found in this node"
             )));
         }
+
+        self.update_last_active();
 
         for task_set in self.task_sets.iter_mut() {
             if task_set.never_executed(&partition) {
@@ -574,6 +604,7 @@ impl StageState {
             .find(|task_set| task_set.id == task_set_id)
             .ok_or_else(|| DistError::internal(format!("Task set {task_set_id} not found")))?;
         task_set.running_partitions.insert(partition, abort_handle);
+        self.update_last_active();
         Ok(())
     }
 
@@ -590,6 +621,7 @@ impl StageState {
                 .dropped_partitions
                 .insert(task_id.partition as usize, task_metrics);
         }
+        self.update_last_active();
     }
 
     pub fn never_executed(&self) -> bool {
@@ -723,31 +755,60 @@ impl Drop for TaskStream {
     }
 }
 
-fn start_job_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: Arc<DistConfig>) {
+/// Returns the ids of the local stages that should be cleaned up, as
+/// `(expired, inactive)`.
+fn stages_to_clean(
+    stages: &HashMap<StageId, StageState>,
+    now_ms: i64,
+    config: &DistConfig,
+) -> (Vec<StageId>, Vec<StageId>) {
+    let job_ttl_ms = config.job_ttl.as_millis() as i64;
+    let inactivity_ms = config.stage_inactivity_timeout.as_millis() as i64;
+
+    let mut expired = Vec::new();
+    let mut inactive = Vec::new();
+    for (stage_id, stage_state) in stages {
+        if now_ms - stage_state.created_at_ms >= job_ttl_ms {
+            expired.push(stage_id.clone());
+        } else if stage_state.is_inactive(now_ms, inactivity_ms) {
+            inactive.push(stage_id.clone());
+        }
+    }
+
+    (expired, inactive)
+}
+
+fn start_stage_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: Arc<DistConfig>) {
     tokio::spawn(async move {
+        let display_ids = |ids: &[StageId]| {
+            ids.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
         loop {
             tokio::time::sleep(config.job_ttl_check_interval).await;
 
             let mut guard = stages.lock();
-            let mut to_cleanup = Vec::new();
-            for (stage_id, stage_state) in guard.iter() {
-                let age_ms = timestamp_ms() - stage_state.created_at_ms;
-                if age_ms >= config.job_ttl.as_millis() as i64 {
-                    to_cleanup.push(stage_id.clone());
-                }
-            }
+            let (expired, inactive) = stages_to_clean(&guard, timestamp_ms(), &config);
 
-            if !to_cleanup.is_empty() {
+            if !expired.is_empty() {
                 debug!(
                     "Stages [{}] lifetime exceed job ttl {}s, cleaning up.",
-                    to_cleanup
-                        .iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
+                    display_ids(&expired),
                     config.job_ttl.as_secs()
                 );
-                cleanup_stages(&mut guard, |stage_id| to_cleanup.contains(stage_id));
+                cleanup_stages(&mut guard, |stage_id| expired.contains(stage_id));
+            }
+
+            if !inactive.is_empty() {
+                warn!(
+                    "Stages [{}] made no progress for more than {}s, cleaning up.",
+                    display_ids(&inactive),
+                    config.stage_inactivity_timeout.as_secs()
+                );
+                cleanup_stages(&mut guard, |stage_id| inactive.contains(stage_id));
             }
             drop(guard);
         }
