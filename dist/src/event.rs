@@ -9,6 +9,7 @@ use futures::future::join_all;
 use log::{debug, error, warn};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::Instrument as _;
 
 use crate::{
     DistError, DistResult, JobId,
@@ -17,6 +18,7 @@ use crate::{
     network::{DistNetwork, StageInfo},
     planner::StageId,
     runtime::{StageState, cleanup_stages},
+    trace,
 };
 
 #[derive(Debug, Clone)]
@@ -140,44 +142,60 @@ impl EventHandler {
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
             let sender = self.sender.clone();
-            tokio::spawn(async move {
-                handle_check_jobs_completed(
-                    &cluster,
-                    &network,
-                    &local_stages,
-                    &sender,
-                    check_job_ids.clone(),
-                )
-                .await;
-            });
+            // Each spawn starts from no context of its own, so the operation
+            // names itself: the batch loop has mixed the jobs of many callers
+            // by the time it gets here.
+            let span = trace::check_completed_span(check_job_ids.len());
+            tokio::spawn(
+                async move {
+                    handle_check_jobs_completed(
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        &sender,
+                        check_job_ids.clone(),
+                    )
+                    .await;
+                }
+                .instrument(span),
+            );
         }
 
         if !cleanup_job_ids.is_empty() {
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone()).await
-                {
-                    error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
+            let span = trace::cleanup_jobs_span(cleanup_job_ids.len());
+            tokio::spawn(
+                async move {
+                    if let Err(e) =
+                        cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone())
+                            .await
+                    {
+                        error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
+                    }
                 }
-            });
+                .instrument(span),
+            );
         }
 
         if !all_stage0_ids.is_empty() {
             let local_stages = self.local_stages.clone();
             let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
             let sender = self.sender.clone();
-            tokio::spawn(async move {
-                wait_stage0_tasks_polling(
-                    &local_stages,
-                    stage0_task_poll_timeout,
-                    &sender,
-                    all_stage0_ids,
-                )
-                .await
-            });
+            let span = trace::stage0_poll_span(all_stage0_ids.len());
+            tokio::spawn(
+                async move {
+                    wait_stage0_tasks_polling(
+                        &local_stages,
+                        stage0_task_poll_timeout,
+                        &sender,
+                        all_stage0_ids,
+                    )
+                    .await
+                }
+                .instrument(span),
+            );
         }
     }
 }

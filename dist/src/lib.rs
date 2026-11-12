@@ -9,6 +9,7 @@ pub mod physical_plan;
 pub mod planner;
 pub mod runtime;
 pub mod scheduler;
+mod trace;
 pub mod util;
 
 pub use error::{DistError, DistResult};

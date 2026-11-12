@@ -24,6 +24,7 @@ use datafusion_physical_plan::{
 use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
 use log::{debug, error, warn};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
+use tracing::{Instrument as _, Span};
 
 use crate::{
     DistError, DistResult, JobId,
@@ -38,6 +39,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
+    trace,
     util::{ReceiverStreamBuilder, timestamp_ms},
 };
 
@@ -129,6 +131,11 @@ impl DistRuntime {
         self.heartbeater.send_heartbeat().await;
     }
 
+    /// Submit a job for distributed execution.
+    ///
+    /// The span opened here is the job's entry point in this process: a caller
+    /// that already has a span, one per request say, gets it as the parent and
+    /// every line the nodes write about this job can be read back to it.
     pub async fn submit(
         &self,
         job_id: impl Into<JobId>,
@@ -136,6 +143,22 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         let job_id = job_id.into();
+        let span = trace::submit_span(&job_id);
+        // The inner future records into the span, so it gets a clone: a `Span`
+        // is a handle, and `record` is what fills in the two fields left empty
+        // at construction.
+        self.submit_inner(job_id, plan, job_meta, span.clone())
+            .instrument(span)
+            .await
+    }
+
+    async fn submit_inner(
+        &self,
+        job_id: JobId,
+        plan: Arc<dyn ExecutionPlan>,
+        job_meta: Arc<HashMap<String, String>>,
+        span: Span,
+    ) -> DistResult<HashMap<TaskId, NodeId>> {
         debug!(
             "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
@@ -149,6 +172,8 @@ impl DistRuntime {
         check_initial_stage_plans(job_id.clone(), &stage_plans)?;
 
         let node_states = self.cluster.alive_nodes().await?;
+        span.record("stages", stage_plans.len());
+        span.record("nodes", node_states.len());
         debug!(
             "alive nodes: {}",
             node_states
@@ -236,11 +261,18 @@ impl DistRuntime {
                         .collect::<Vec<String>>()
                         .join(", ")
                 );
+                // The send runs on a task of its own, which is where a trace
+                // of this job would otherwise stop: neither `tokio::spawn` nor
+                // the transport below it carries the span of the caller.
+                let send_span = trace::send_tasks_span(&node_id, scheduled_tasks.task_ids.len());
                 let network = self.network.clone();
-                let handle = tokio::spawn(async move {
-                    network.send_tasks(node_id.clone(), scheduled_tasks).await?;
-                    Ok::<_, DistError>(())
-                });
+                let handle = tokio::spawn(
+                    async move {
+                        network.send_tasks(node_id.clone(), scheduled_tasks).await?;
+                        Ok::<_, DistError>(())
+                    }
+                    .instrument(send_span),
+                );
                 handles.push(handle);
             }
         }
@@ -254,7 +286,23 @@ impl DistRuntime {
         Ok(stage0_task_distribution)
     }
 
+    /// Execute one task of a job on this node.
+    ///
+    /// The task runs in two places this future does not reach: the driver task
+    /// that produces the batches, which is spawned on the CPU-bound executor,
+    /// and the stream that is polled by whoever fetched the task. Both carry the
+    /// span themselves, because neither inherits the span of its creator.
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
+        let span = trace::task_span(&task_id, &self.node_id);
+        let task_stream = self.prepare_task_stream(task_id, span)?;
+
+        Ok(Box::pin(task_stream))
+    }
+
+    fn prepare_task_stream(&self, task_id: TaskId, span: Span) -> DistResult<TaskStream> {
+        // The setup below runs on the caller's task, so being in the span is
+        // enough for it; the driver and the stream are handed over.
+        let _enter = span.clone().entered();
         let stage_id = task_id.stage_id();
 
         let mut guard = self.stages.lock();
@@ -286,7 +334,8 @@ impl DistRuntime {
                 }
             }
             Ok(()) as DistResult<()>
-        };
+        }
+        .instrument(span.clone());
 
         let abort_handle = receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
         stage_state.start_task(task_id.partition as usize, task_set_id, abort_handle)?;
@@ -298,15 +347,14 @@ impl DistRuntime {
             stream.map_err(DataFusionError::from),
         ));
 
-        let task_stream = TaskStream::new(
+        Ok(TaskStream::new(
             task_id,
             task_set_id,
             self.stages.clone(),
             self.event_sender.clone(),
             stream,
-        );
-
-        Ok(Box::pin(task_stream))
+            span,
+        ))
     }
 
     pub async fn execute_remote(
@@ -320,25 +368,29 @@ impl DistRuntime {
             )));
         }
 
-        debug!("Executing remote task {task_id} on node {node_id}");
-        self.network.execute_task(node_id, task_id).await
+        let span = trace::task_span(&task_id, &node_id);
+        async move {
+            debug!("Executing remote task {task_id} on node {node_id}");
+            self.network.execute_task(node_id, task_id).await
+        }
+        .instrument(span)
+        .await
     }
 
     /// Receive the tasks of a job on this node.
     ///
-    /// The request that produced the job travels with it in the job meta: the
-    /// scheduler and the executor are two processes, and the meta is the one
-    /// thing that crosses between them. Reporting it from a span here is what
-    /// lets an executor's own lines — which are `log` records, bridged into
-    /// tracing by the binary that hosts this library — be read back to the
-    /// statement that caused them.
+    /// The job id is part of the tasks — every [`TaskId`] carries it — so the
+    /// span does not have to go looking for it in the job meta. That map is the
+    /// caller's business data, and nothing in this library reads it.
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        use tracing::Instrument as _;
-
-        let meta = &scheduled_tasks.job_meta;
-        let req_id = meta.get("req_id").map(String::as_str).unwrap_or_default();
-        let job_id = meta.get("job_id").map(String::as_str).unwrap_or_default();
-        let span = tracing::info_span!("receive_tasks", req_id = %req_id, job_id = %job_id);
+        // A missing task list reads as an empty field rather than an error:
+        // the tasks are validated where they are used.
+        let job_id = scheduled_tasks
+            .job_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let span =
+            trace::receive_tasks_span(&job_id, &self.node_id, scheduled_tasks.task_ids.len());
         self.receive_tasks_inner(scheduled_tasks)
             .instrument(span)
             .await
@@ -390,6 +442,9 @@ impl DistRuntime {
     }
 
     pub fn cleanup_local_jobs(&self, job_ids: Vec<JobId>) {
+        let span = trace::cleanup_jobs_span(job_ids.len());
+        let _enter = span.enter();
+
         debug!(
             "Cleaning up local Jobs [{}]",
             job_ids
@@ -691,6 +746,10 @@ pub struct TaskStream {
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
     pub stream: SendableRecordBatchStream,
+    /// Span of this task. The stream is polled, and dropped, by whoever holds
+    /// it — a tonic server, or the `ProxyExec` of the stage consuming this one
+    /// — so it carries its own span instead of relying on the caller's.
+    pub span: Span,
     pub output_rows: usize,
     pub output_bytes: usize,
     pub completed: bool,
@@ -703,6 +762,7 @@ impl TaskStream {
         stages: Arc<Mutex<HashMap<StageId, StageState>>>,
         event_sender: Sender<Event>,
         stream: SendableRecordBatchStream,
+        span: Span,
     ) -> Self {
         Self {
             task_id,
@@ -710,6 +770,7 @@ impl TaskStream {
             stages,
             event_sender,
             stream,
+            span,
             output_rows: 0,
             output_bytes: 0,
             completed: false,
@@ -721,6 +782,7 @@ impl Stream for TaskStream {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let _enter = self.span.clone().entered();
         match self.stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 self.output_rows += batch.num_rows();
@@ -745,6 +807,7 @@ impl RecordBatchStream for TaskStream {
 
 impl Drop for TaskStream {
     fn drop(&mut self) {
+        let _enter = self.span.clone().entered();
         let task_id = self.task_id.clone();
         let task_set_id = self.task_set_id;
         let task_metrics = TaskMetrics {

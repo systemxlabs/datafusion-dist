@@ -25,5 +25,4 @@ futures = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
-tracing = { workspace = true }
 uuid = { workspace = true }
