@@ -324,7 +324,27 @@ impl DistRuntime {
         self.network.execute_task(node_id, task_id).await
     }
 
+    /// Receive the tasks of a job on this node.
+    ///
+    /// The request that produced the job travels with it in the job meta: the
+    /// scheduler and the executor are two processes, and the meta is the one
+    /// thing that crosses between them. Reporting it from a span here is what
+    /// lets an executor's own lines — which are `log` records, bridged into
+    /// tracing by the binary that hosts this library — be read back to the
+    /// statement that caused them.
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        use tracing::Instrument as _;
+
+        let meta = &scheduled_tasks.job_meta;
+        let req_id = meta.get("req_id").map(String::as_str).unwrap_or_default();
+        let job_id = meta.get("job_id").map(String::as_str).unwrap_or_default();
+        let span = tracing::info_span!("receive_tasks", req_id = %req_id, job_id = %job_id);
+        self.receive_tasks_inner(scheduled_tasks)
+            .instrument(span)
+            .await
+    }
+
+    async fn receive_tasks_inner(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
         if matches!(*self.status.lock(), NodeStatus::Terminating) {
             return Err(DistError::internal(
                 "Local node is in Terminating status, cannot receive tasks",

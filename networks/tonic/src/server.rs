@@ -110,14 +110,27 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<protobuf::TaskId>,
     ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
+        use tracing::Instrument as _;
+
         let task_id = parse_task_id(request.into_inner());
-        let record_batch_stream =
-            self.runtime
-                .execute_local(task_id.clone())
-                .await
-                .map_err(|e| {
-                    Status::internal(format!("Failed to execute local task {task_id}: {e}"))
-                })?;
+        // A third call with a request id of its own: the task id is what links
+        // this execution to the job, and the job to the statement that asked for
+        // it. The `SendTasks` call that delivered the job carried the request id
+        // in the job meta; this one only knows the task.
+        let span = tracing::info_span!(
+            "execute_task",
+            job_id = %task_id.job_id,
+            stage = task_id.stage,
+            partition = task_id.partition
+        );
+        let record_batch_stream = self
+            .runtime
+            .execute_local(task_id.clone())
+            .instrument(span)
+            .await
+            .map_err(|e| {
+                Status::internal(format!("Failed to execute local task {task_id}: {e}"))
+            })?;
 
         let schema = record_batch_stream.schema();
 

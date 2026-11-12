@@ -27,6 +27,7 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]

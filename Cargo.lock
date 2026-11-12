@@ -1475,6 +1475,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1556,6 +1557,7 @@ dependencies = [
  "prost",
  "tonic",
  "tonic-prost",
+ "tracing",
  "uuid",
 ]
 
