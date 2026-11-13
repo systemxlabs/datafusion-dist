@@ -115,6 +115,53 @@ Server::builder()
 With the default extractor, requests without a `traceparent` header start a new trace,
 so every incoming request is traced once a reporter is installed.
 
+### Log correlation
+
+The library logs through the `log` crate. fastrace does not collect those records by
+itself, so an application that wants log lines and traces to reference each other uses
+[logforth](https://github.com/fast/logforth), which can add the active span's ids to every
+record and attach records to the span as fastrace events:
+
+```toml
+[dependencies]
+logforth = { version = "0.30", features = [
+    "starter-log",
+    "diagnostic-fastrace",
+    "append-fastrace",
+] }
+```
+
+```rust,ignore
+use logforth::{
+    append, diagnostic, filter::rustlog::RustLogFilterBuilder, layout,
+    record::{Level, LevelFilter},
+};
+
+let filter = || RustLogFilterBuilder::from_default_env().build();
+
+logforth::starter_log::builder()
+    // Regular logs keep RUST_LOG semantics and gain trace_id/span_id/sampled
+    // fields whenever a span is active.
+    .dispatch(move |d| {
+        d.filter(filter())
+            .diagnostic(diagnostic::FastraceDiagnostic::default())
+            .append(append::Stderr::default().with_layout(layout::TextLayout::default()))
+    })
+    // Optionally, attach info and above to the active span as fastrace events.
+    .dispatch(move |d| {
+        d.filter(LevelFilter::MoreSevereEqual(Level::Info))
+            .append(append::FastraceEvent::default())
+    })
+    .apply();
+```
+
+`RUST_LOG` keeps working exactly as with `env_logger`. The event dispatch is deliberately
+limited to info and above: per-task details are logged at debug, and turning all of them
+into events makes traces very large. Remove that second dispatch if log lines are enough.
+
+Libraries should keep logging through `log` and leave the choice of backend and bridge to
+the application.
+
 ### Instrumented spans
 
 | Span | Key properties |

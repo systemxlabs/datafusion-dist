@@ -34,9 +34,41 @@ use log::info;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
 use uuid::Uuid;
 
+/// Configure logging and its relation to tracing.
+///
+/// Logs keep the `RUST_LOG` semantics of `env_logger`. Every log line written
+/// while a fastrace span is active carries that span's `trace_id` and `span_id`,
+/// which is what lets an operator jump from a log line to the trace of the job
+/// it belongs to.
+fn init_logging() {
+    use logforth::{
+        append, diagnostic,
+        filter::rustlog::RustLogFilterBuilder,
+        layout,
+        record::{Level, LevelFilter},
+    };
+
+    let filter = || RustLogFilterBuilder::from_default_env().build();
+
+    logforth::starter_log::builder()
+        .dispatch(move |d| {
+            d.filter(filter())
+                .diagnostic(diagnostic::FastraceDiagnostic::default())
+                .append(append::Stderr::default().with_layout(layout::TextLayout::default()))
+        })
+        // Attach info and above to the active span as fastrace events. Debug and
+        // trace stay in the log stream: this crate logs per-task details at
+        // debug, and turning all of them into trace events makes traces huge.
+        .dispatch(move |d| {
+            d.filter(LevelFilter::MoreSevereEqual(Level::Info))
+                .append(append::FastraceEvent::default())
+        })
+        .apply();
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init();
+    init_logging();
 
     // Tracing is disabled unless a reporter is installed. Set `FASTRACE_CONSOLE`
     // to print collected traces to stderr.
