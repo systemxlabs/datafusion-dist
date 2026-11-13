@@ -70,6 +70,7 @@ impl Default for DefaultScheduler {
 
 #[async_trait::async_trait]
 impl DistScheduler for DefaultScheduler {
+    #[fastrace::trace(name = "dist.scheduler.schedule")]
     async fn schedule(
         &self,
         local_node: &NodeId,

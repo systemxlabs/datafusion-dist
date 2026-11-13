@@ -24,6 +24,13 @@ pub struct NodeTask {
     pub stage: u32,
     #[prost(uint32, tag = "5")]
     pub partition: u32,
+    /// W3C traceparent of the job this task belongs to.
+    ///
+    /// The ticket is opaque to the FlightSQL client, so this joins the
+    /// `do_get` that reads the task to the trace of the statement that
+    /// submitted the job, without the client propagating anything.
+    #[prost(string, optional, tag = "6")]
+    pub traceparent: Option<::prost::alloc::string::String>,
 }
 
 impl NodeTask {
@@ -34,6 +41,7 @@ impl NodeTask {
             job_id: task_id.job_id.to_string(),
             stage: task_id.stage,
             partition: task_id.partition,
+            traceparent: None,
         }
     }
 

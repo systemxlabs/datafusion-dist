@@ -78,6 +78,7 @@ impl Display for TaskId {
 pub struct DefaultPlanner;
 
 impl DistPlanner for DefaultPlanner {
+    #[fastrace::trace(name = "dist.planner.plan_stages")]
     fn plan_stages(
         &self,
         job_id: JobId,

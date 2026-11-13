@@ -21,8 +21,11 @@ datafusion-execution = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto = { workspace = true }
+fastrace = { workspace = true }
+fastrace-tonic = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
+tower = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 uuid = { workspace = true }

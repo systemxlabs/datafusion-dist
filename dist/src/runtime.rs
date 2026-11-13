@@ -8,6 +8,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use fastrace::prelude::*;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -129,6 +130,7 @@ impl DistRuntime {
         self.heartbeater.send_heartbeat().await;
     }
 
+    #[fastrace::trace(name = "dist.runtime.submit")]
     pub async fn submit(
         &self,
         job_id: impl Into<JobId>,
@@ -237,10 +239,18 @@ impl DistRuntime {
                         .join(", ")
                 );
                 let network = self.network.clone();
-                let handle = tokio::spawn(async move {
-                    network.send_tasks(node_id.clone(), scheduled_tasks).await?;
-                    Ok::<_, DistError>(())
-                });
+                // A spawned task does not inherit the caller's local parent, and
+                // the network client reads that parent to put `traceparent` on
+                // the wire. Carry the span across the spawn so the tasks this
+                // delivery creates on the remote node continue the job's trace.
+                let send_span = Span::enter_with_local_parent("dist.send_tasks");
+                let handle = tokio::spawn(
+                    async move {
+                        network.send_tasks(node_id.clone(), scheduled_tasks).await?;
+                        Ok::<_, DistError>(())
+                    }
+                    .in_span(send_span),
+                );
                 handles.push(handle);
             }
         }
@@ -254,6 +264,7 @@ impl DistRuntime {
         Ok(stage0_task_distribution)
     }
 
+    #[fastrace::trace(name = "dist.runtime.execute_local")]
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
         let stage_id = task_id.stage_id();
 
@@ -270,6 +281,7 @@ impl DistRuntime {
         let tx = receiver_stream_builder.tx();
         let partition = task_id.partition as usize;
         let task_ctx = self.task_ctx.clone();
+        let task_span = Span::enter_with_local_parent("dist.task.execute");
         let driver_task = async move {
             let mut df_stream = plan.execute(partition, task_ctx)?;
 
@@ -286,7 +298,8 @@ impl DistRuntime {
                 }
             }
             Ok(()) as DistResult<()>
-        };
+        }
+        .in_span(task_span);
 
         let abort_handle = receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
         stage_state.start_task(task_id.partition as usize, task_set_id, abort_handle)?;
@@ -309,6 +322,7 @@ impl DistRuntime {
         Ok(Box::pin(task_stream))
     }
 
+    #[fastrace::trace(name = "dist.runtime.execute_remote")]
     pub async fn execute_remote(
         &self,
         node_id: NodeId,
@@ -324,6 +338,7 @@ impl DistRuntime {
         self.network.execute_task(node_id, task_id).await
     }
 
+    #[fastrace::trace(name = "dist.runtime.receive_tasks")]
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
         if matches!(*self.status.lock(), NodeStatus::Terminating) {
             return Err(DistError::internal(
@@ -392,6 +407,7 @@ impl DistRuntime {
         local_jobs(&self.stages, job_ids)
     }
 
+    #[fastrace::trace(name = "dist.runtime.get_all_jobs")]
     pub async fn get_all_jobs(&self) -> DistResult<HashMap<StageId, StageInfo>> {
         // First, get local status for all jobs
         let mut combined_status = local_jobs(&self.stages, None);

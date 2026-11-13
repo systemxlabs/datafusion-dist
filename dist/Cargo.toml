@@ -18,6 +18,7 @@ datafusion-execution = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 derive-with = { workspace = true }
+fastrace = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 local-ip-address = { workspace = true }

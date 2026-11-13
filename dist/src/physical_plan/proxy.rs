@@ -152,6 +152,7 @@ impl DisplayAs for ProxyExec {
     }
 }
 
+#[fastrace::trace(name = "dist.proxy.get_df_batch_stream")]
 async fn get_df_batch_stream(
     runtime: DistRuntime,
     node_id: NodeId,
