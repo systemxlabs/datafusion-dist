@@ -126,7 +126,8 @@ pub struct EventHandler {
     pub local_stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     /// The same index of a job's trace that the runtime keeps, so that the lines
     /// this loop writes are joined to a job without scanning its stages.
-    pub job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
+    /// `pub(crate)`: it is the runtime's shortcut, not a field of the handler.
+    pub(crate) job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
     pub sender: Sender<Event>,
     pub receiver: Receiver<Event>,
 }

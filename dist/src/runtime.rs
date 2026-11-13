@@ -162,14 +162,13 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> Submit<'_> {
         Submit {
-            parts: Some(SubmitParts {
+            state: SubmitState::Pending(SubmitParts {
                 runtime: self,
                 job_id: job_id.into(),
                 plan,
                 job_meta,
                 trace: TraceContext::none(),
             }),
-            inner: None,
         }
     }
 
@@ -342,22 +341,22 @@ impl DistRuntime {
     /// call carries one when the caller has a span to name — passes it here: the
     /// task still belongs to its job, but the fetch that asked for it is its
     /// immediate parent. `parent` is used as given, so the task span derives its
-    /// id from it exactly as it would from the stored context; `None` falls back
-    /// to the stage's own trace, which is what [`DistRuntime::execute_local`]
-    /// does.
+    /// id from it exactly as it would from the stored context.
     ///
-    /// The tonic transport does not send a context on `ExecuteTask` yet, because
-    /// `DistNetwork::execute_task` has no parameter to carry one; this entry
-    /// point is what that change would use, and it is what a host embedding the
-    /// runtime directly can use today.
+    /// `None` falls back to the stage's own trace, which is what
+    /// [`DistRuntime::execute_local`] does — and so does
+    /// `Some(TraceContext::none())`, which is what a caller that found an
+    /// unusable header ends up with. An empty context is not an instruction to
+    /// stop tracing the job: it is the absence of a parent, and the job's own
+    /// trace is still worth continuing.
     pub async fn execute_local_with_parent(
         &self,
         task_id: TaskId,
         parent: Option<TraceContext>,
     ) -> DistResult<SendableRecordBatchStream> {
         let trace = match parent {
-            Some(parent) => parent,
-            None => self.stage_trace(&task_id.stage_id()),
+            Some(parent) if !parent.is_none() => parent,
+            _ => self.stage_trace(&task_id.stage_id()),
         };
         let (_, span_id) = trace.child();
         let span = trace::task_span(&trace, span_id, &task_id, &self.node_id);
@@ -468,12 +467,16 @@ impl DistRuntime {
         }
 
         let trace = self.job_trace_of(&task_id.job_id).unwrap_or_default();
-        let (_, span_id) = trace.child();
+        // The hop the callee should treat as its parent is the span opened right
+        // here, so the ids of the fetch and of the execution it causes line up.
+        let (hop, span_id) = trace.child();
         let span = trace::task_fetch_span(&trace, span_id, &task_id, &node_id);
         span.follows_from(tracing::Span::current());
         async move {
             debug!("Executing remote task {task_id} on node {node_id}");
-            self.network.execute_task(node_id, task_id).await
+            self.network
+                .execute_task_with_trace(node_id, task_id, hop)
+                .await
         }
         .instrument(span)
         .await
@@ -671,10 +674,16 @@ fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
 /// `async fn submit` — keeps working.
 #[must_use = "submitting a job does nothing until the value is awaited"]
 pub struct Submit<'a> {
-    parts: Option<SubmitParts<'a>>,
+    state: SubmitState<'a>,
+}
+
+/// Where a [`Submit`] is: naming its trace happens before the first poll, and
+/// polling is what turns the parts into the future that runs the job.
+enum SubmitState<'a> {
+    Pending(SubmitParts<'a>),
     /// Built on the first poll: [`Future::poll`] is the only place where the
     /// fields can be moved out, since `with_trace_context` runs before it.
-    inner: Option<BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>>>,
+    Started(BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>>),
 }
 
 struct SubmitParts<'a> {
@@ -703,16 +712,29 @@ impl<'a> Submit<'a> {
     /// A host that already opened the span its request runs under needs no
     /// string at all: [`TraceContext::from_parts`] or
     /// [`TraceContext::with_parent_span_id`] name that span directly.
+    ///
+    /// It has to be called before the value is awaited: once the job is running
+    /// its trace is in the wild, and naming another one could only be ignored.
     pub fn with_trace_context(mut self, trace: TraceContext) -> Self {
-        if let Some(parts) = self.parts.as_mut() {
-            parts.trace = trace;
+        match self.state {
+            SubmitState::Pending(ref mut parts) => parts.trace = trace,
+            SubmitState::Started(_) => debug_assert!(
+                false,
+                "with_trace_context is called before the job is awaited"
+            ),
         }
         self
     }
 
     /// The submitted job, as the future that polls it.
     fn start(&mut self) -> BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>> {
-        let parts = self.parts.take().expect("a submit future is started once");
+        let parts = match std::mem::replace(
+            &mut self.state,
+            SubmitState::Started(Box::pin(std::future::pending())),
+        ) {
+            SubmitState::Pending(parts) => parts,
+            SubmitState::Started(_) => unreachable!("a submit future is started once"),
+        };
         Box::pin(async move {
             let SubmitParts {
                 runtime,
@@ -738,10 +760,14 @@ impl<'a> Future for Submit<'a> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().get_mut();
-        if this.inner.is_none() {
-            this.inner = Some(this.start());
+        if matches!(this.state, SubmitState::Pending(_)) {
+            let inner = this.start();
+            this.state = SubmitState::Started(inner);
         }
-        this.inner.as_mut().expect("set above").as_mut().poll(cx)
+        match this.state {
+            SubmitState::Started(ref mut inner) => inner.as_mut().poll(cx),
+            SubmitState::Pending(_) => unreachable!("just started"),
+        }
     }
 }
 
@@ -1120,7 +1146,10 @@ fn start_stage_cleaner(
             }
 
             // The trace index follows the stages out: what is no longer here
-            // cannot be joined to anything.
+            // cannot be joined to anything. It is dropped per job rather than
+            // per stage, so a job with another stage still alive loses its entry
+            // too — `job_trace` then reads the stages once and files the answer
+            // again, which costs one scan and is never wrong.
             for stage_id in expired.iter().chain(inactive.iter()) {
                 job_traces.lock().remove(&stage_id.job_id);
             }

@@ -41,8 +41,11 @@
 //! * `parent_span_id` — the `span_id` of the span this one is a child of; empty
 //!   at the root and for untraced spans.
 //!
-//! They are on the span when it is created, so a subscriber that snapshots span
-//! fields on creation (as datafabric's Loki layer does) needs no `on_record`.
+//! The three trace fields are on a span when it is created, so a subscriber that
+//! snapshots span fields at creation already has everything it needs to join a
+//! line to its job. Fields that are only known later — `stages` and `nodes` of
+//! `dist.job.submit`, for instance — are recorded onto the span afterwards, and
+//! a subscriber needs `on_record` to see those.
 //!
 //! # What this module does not do
 //!
@@ -55,7 +58,7 @@
 //! [`DistRuntime::submit`]: crate::runtime::DistRuntime::submit
 //! [`DistRuntime::execute_local`]: crate::runtime::DistRuntime::execute_local
 
-use std::{fmt, fmt::Write as _};
+use std::fmt;
 
 use tracing::Span;
 
@@ -327,13 +330,10 @@ fn hex<const N: usize>(bytes: [u8; N]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(N * 2);
     for byte in bytes {
-        // Infallible for a `String`, and cheaper than a `format!` per byte.
-        let _ = write!(
-            out,
-            "{}{}",
-            DIGITS[usize::from(byte >> 4)] as char,
-            DIGITS[usize::from(byte & 0x0f)] as char
-        );
+        // Two pushes of a byte the table already holds, because this runs once
+        // per id field of every span and a formatter per byte is money.
+        out.push(DIGITS[usize::from(byte >> 4)] as char);
+        out.push(DIGITS[usize::from(byte & 0x0f)] as char);
     }
     out
 }
@@ -1079,6 +1079,69 @@ mod tests {
             partition: 0,
         };
         assert!(runtime.trace_of(&elsewhere).is_none());
+    }
+
+    /// A caller that read an unusable header off the wire ends up with an empty
+    /// context, and an empty context must not erase the trace the job already
+    /// has: the task continues the job's trace, one parent short.
+    #[tokio::test]
+    async fn an_empty_parent_falls_back_to_the_jobs_trace() {
+        let recorder = Arc::new(Recorder::default());
+        let _guard = tracing::subscriber::set_default(Recording(recorder.clone()));
+
+        let node = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50050,
+        };
+        let ctx = SessionContext::new();
+        let runtime = DistRuntime::new(
+            ctx.task_ctx(),
+            Arc::new(DistConfig::default()),
+            Arc::new(SingleNodeCluster { node: node.clone() }),
+            Arc::new(UnreachableNetwork { node: node.clone() }),
+        )
+        .with_executor(Arc::new(CurrentRuntime {
+            handle: Handle::current(),
+        }));
+
+        let schema: SchemaRef = Arc::new(Schema::new(vec![ArrowField::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProbeExec {
+            schema: schema.clone(),
+            properties: EmptyExec::new(schema).properties().clone(),
+        });
+
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        let stage0 = runtime
+            .submit("test-job", plan, Arc::new(HashMap::new()))
+            .with_trace_context(caller)
+            .await
+            .expect("submit");
+        let (task_id, _) = stage0.iter().next().expect("one stage0 task");
+
+        // What the transport hands over when the header was unreadable.
+        let mut stream = runtime
+            .execute_local_with_parent(task_id.clone(), Some(TraceContext::none()))
+            .await
+            .expect("execute local");
+        while stream.next().await.is_some() {}
+        drop(stream);
+
+        let spans = recorder.spans.lock().clone();
+        let task = spans
+            .iter()
+            .find(|span| span.name == super::span_name::TASK_EXECUTE)
+            .expect("the task ran");
+        assert_eq!(
+            task.field("trace_id"),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+            "an empty parent must not blank the job's trace"
+        );
+        assert_ne!(task.field("span_id"), Some(""));
+        assert_ne!(task.field("parent_span_id"), Some(""));
     }
 
     /// `submit` used to be an `async fn`, so callers spawned and joined it. The

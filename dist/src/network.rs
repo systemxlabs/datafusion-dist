@@ -28,6 +28,25 @@ pub trait DistNetwork: Debug + Send + Sync {
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream>;
 
+    /// As [`DistNetwork::execute_task`], for a caller that has a trace to
+    /// announce: the context of the hop that asks for the task, whose span the
+    /// execution becomes a child of on the other side.
+    ///
+    /// A transport that cannot carry a context ignores it and runs the task as
+    /// [`DistNetwork::execute_task`] would; the task then continues the trace its
+    /// job was received with, which is the same trace, one link shorter. That is
+    /// why this has a body: a transport added later needs no change to be correct,
+    /// only a change to be complete.
+    async fn execute_task_with_trace(
+        &self,
+        node_id: NodeId,
+        task_id: TaskId,
+        trace: TraceContext,
+    ) -> DistResult<SendableRecordBatchStream> {
+        let _ = trace;
+        self.execute_task(node_id, task_id).await
+    }
+
     async fn get_jobs(
         &self,
         node_id: NodeId,

@@ -230,9 +230,28 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream> {
+        self.execute_task_with_trace(
+            node_id,
+            task_id,
+            datafusion_dist::trace::TraceContext::none(),
+        )
+        .await
+    }
+
+    async fn execute_task_with_trace(
+        &self,
+        node_id: NodeId,
+        task_id: TaskId,
+        trace: datafusion_dist::trace::TraceContext,
+    ) -> DistResult<SendableRecordBatchStream> {
         let mut tonic_client = self.build_tonic_client(&node_id).await?;
+        // The trace of this hop, in the header where the receiver looks for it.
+        let request = with_traceparent(
+            tonic::Request::new(serialize_task_id(task_id)),
+            trace.traceparent().as_deref(),
+        )?;
         let response = tonic_client
-            .execute_task(serialize_task_id(task_id))
+            .execute_task(request)
             .await
             .map_err(|e| DistError::network(Box::new(e)))?;
 
