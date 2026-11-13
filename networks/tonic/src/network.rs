@@ -179,12 +179,26 @@ impl DistNetwork for DistTonicNetwork {
     }
 
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        // The trace of this delivery goes in the metadata, not in the message:
+        // it describes the hop, and it changes per attempt — a retried call
+        // announces a new span of the same trace rather than replaying the
+        // span id of an attempt that never arrived.
+        let traceparent = scheduled_tasks.trace.traceparent();
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
 
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
+            let mut request = tonic::Request::new(send_tasks_req.clone());
+            if let Some(traceparent) = &traceparent {
+                request.metadata_mut().insert(
+                    datafusion_dist::trace::TRACEPARENT_HEADER,
+                    traceparent
+                        .parse()
+                        .map_err(|e| DistError::internal(format!("Invalid traceparent: {e}")))?,
+                );
+            }
             tonic_client
-                .send_tasks(send_tasks_req.clone())
+                .send_tasks(request)
                 .await
                 .map_err(|e| DistError::network(Box::new(e)))?;
             Ok(())

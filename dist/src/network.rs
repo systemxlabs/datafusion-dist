@@ -13,6 +13,7 @@ use crate::{
     cluster::NodeId,
     planner::{StageId, TaskId},
     runtime::{StageState, TaskMetrics, TaskSet},
+    trace::TraceContext,
 };
 
 #[async_trait::async_trait]
@@ -41,6 +42,15 @@ pub struct ScheduledTasks {
     pub task_ids: Vec<TaskId>,
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     pub job_meta: Arc<HashMap<String, String>>,
+    /// The trace of the job, as the node that sends these tasks hands it over.
+    ///
+    /// It is this hop's context, not the job's: the receiving node derives its
+    /// own span id from it, so the ids of a job form a tree across processes
+    /// without either side knowing the other's. How the context crosses the
+    /// wire is the transport's business — the tonic network sends it as the
+    /// `traceparent` metadata of the call; an in-process caller hands it over
+    /// with [`ScheduledTasks::with_trace`].
+    pub trace: TraceContext,
 }
 
 impl ScheduledTasks {
@@ -55,7 +65,14 @@ impl ScheduledTasks {
             task_ids,
             job_task_distribution,
             job_meta,
+            trace: TraceContext::none(),
         }
+    }
+
+    /// Attach the trace of the job being distributed.
+    pub fn with_trace(mut self, trace: TraceContext) -> Self {
+        self.trace = trace;
+        self
     }
 
     pub fn job_id(&self) -> DistResult<JobId> {

@@ -24,6 +24,9 @@ use datafusion_physical_plan::{
 use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
 use log::{debug, error, warn};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
+use tracing::Instrument as _;
+
+use fastrace::{Span, collector::SpanContext, future::FutureExt as _};
 
 use crate::{
     DistError, DistResult, JobId,
@@ -38,6 +41,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
+    trace::{self, Hop, TraceContext},
     util::{ReceiverStreamBuilder, timestamp_ms},
 };
 
@@ -129,6 +133,24 @@ impl DistRuntime {
         self.heartbeater.send_heartbeat().await;
     }
 
+    /// Submit a job for distributed execution.
+    ///
+    /// The job is traced when `job_meta` carries a W3C `traceparent` header
+    /// (see [`TRACEPARENT_HEADER`]): the header names the request the job
+    /// answers, and every line the nodes write about this job — and the trace
+    /// a fastrace reporter exports — carries the same `trace_id`. A host that
+    /// took a traceparent off its incoming request passes it through without
+    /// translation; a caller that sends none runs untraced, as before.
+    ///
+    /// ```ignore
+    /// let mut job_meta = HashMap::from([("req_id".to_string(), req_id)]);
+    /// if let Some(header) = request_headers.get("traceparent") {
+    ///     job_meta.insert(TRACEPARENT_HEADER.to_string(), header);
+    /// }
+    /// runtime.submit(job_id, plan, Arc::new(job_meta)).await?;
+    /// ```
+    ///
+    /// [`TRACEPARENT_HEADER`]: crate::trace::TRACEPARENT_HEADER
     pub async fn submit(
         &self,
         job_id: impl Into<JobId>,
@@ -136,6 +158,36 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         let job_id = job_id.into();
+        // The header that does not parse reads as no trace rather than as an
+        // error: the job still has work to do, it just runs untraced — the
+        // same thing that happens when the caller sends none.
+        let caller_trace = job_meta
+            .get(trace::TRACEPARENT_HEADER)
+            .and_then(|header| TraceContext::parse(header))
+            .unwrap_or_default();
+        // The span of this node's view of the job, and the context its
+        // children inherit: the caller's span is the parent of both. The local
+        // span that asked for the submission, if there is one, is linked:
+        // fastrace only has one parent per span.
+        let hop = trace::submit_hop(&caller_trace, &job_id, SpanContext::current_local_parent());
+        self.submit_inner(job_id, plan, job_meta, &hop)
+            .instrument(hop.tr.clone())
+            .await
+    }
+
+    async fn submit_inner(
+        &self,
+        job_id: JobId,
+        plan: Arc<dyn ExecutionPlan>,
+        job_meta: Arc<HashMap<String, String>>,
+        // The hop of the job as this node submits it: the context to hand to
+        // the children of the job's span derives from it, and the `stages` and
+        // `nodes` fields are recorded on it once they are known.
+        hop: &Hop,
+    ) -> DistResult<HashMap<TaskId, NodeId>> {
+        // The context to hand to the children of the job's span: sending the
+        // tasks to one node is one of them.
+        let job_trace = hop.child();
         debug!(
             "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
@@ -149,6 +201,14 @@ impl DistRuntime {
         check_initial_stage_plans(job_id.clone(), &stage_plans)?;
 
         let node_states = self.cluster.alive_nodes().await?;
+        hop.tr.record("stages", stage_plans.len());
+        hop.tr.record("nodes", node_states.len());
+        hop.fr.add_properties(|| {
+            [
+                ("stages", stage_plans.len().to_string()),
+                ("nodes", node_states.len().to_string()),
+            ]
+        });
         debug!(
             "alive nodes: {}",
             node_states
@@ -225,8 +285,16 @@ impl DistRuntime {
             );
 
             if node_id == self.node_id {
-                self.receive_tasks(scheduled_tasks).await?;
+                // Handing the tasks to ourselves is not a hop: the trace goes
+                // straight from the job's span to the one this node opens for
+                // receiving them, with no span id in between that nobody wrote.
+                self.receive_tasks(scheduled_tasks.with_trace(job_trace))
+                    .await?;
             } else {
+                // Far away it is a hop: the delivery is a span of its own, and
+                // the context the executor receives points at it, so the node
+                // that runs the tasks can say where they came from without the
+                // two sides sharing a clock.
                 debug!(
                     "Sending job {job_id} tasks [{}] to {node_id}",
                     scheduled_tasks
@@ -236,11 +304,21 @@ impl DistRuntime {
                         .collect::<Vec<String>>()
                         .join(", ")
                 );
+                // The send runs on a task of its own, which is where a trace
+                // of this job would otherwise stop: neither `tokio::spawn` nor
+                // the transport below it carries the span of the caller.
+                let hop =
+                    trace::send_tasks_hop(&job_trace, &node_id, scheduled_tasks.task_ids.len());
+                let scheduled_tasks = scheduled_tasks.with_trace(hop.child());
                 let network = self.network.clone();
-                let handle = tokio::spawn(async move {
-                    network.send_tasks(node_id.clone(), scheduled_tasks).await?;
-                    Ok::<_, DistError>(())
-                });
+                let handle = tokio::spawn(
+                    async move {
+                        network.send_tasks(node_id.clone(), scheduled_tasks).await?;
+                        Ok::<_, DistError>(())
+                    }
+                    .in_span(hop.fr)
+                    .instrument(hop.tr),
+                );
                 handles.push(handle);
             }
         }
@@ -254,7 +332,51 @@ impl DistRuntime {
         Ok(stage0_task_distribution)
     }
 
+    /// Execute one task of a job on this node.
+    ///
+    /// The task runs in two places this future does not reach: the driver task
+    /// that produces the batches, which is spawned on the CPU-bound executor,
+    /// and the stream that is polled by whoever fetched the task. Both carry the
+    /// span themselves, because neither inherits the span of its creator.
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
+        let trace = self.stage_trace(&task_id.stage_id());
+        // The task belongs to the job, and it is also the continuation of the
+        // fetch that asked for it — two facts a single parent cannot express.
+        let hop = trace::task_hop(
+            &trace,
+            &task_id,
+            &self.node_id,
+            SpanContext::current_local_parent(),
+        );
+        hop.tr.follows_from(tracing::Span::current());
+        let task_stream = self.prepare_task_stream(task_id, hop)?;
+
+        Ok(Box::pin(task_stream))
+    }
+
+    /// The trace of a stage this node holds, or none if it holds no such stage.
+    fn stage_trace(&self, stage_id: &StageId) -> TraceContext {
+        self.stages
+            .lock()
+            .get(stage_id)
+            .map(|stage| stage.trace)
+            .unwrap_or_default()
+    }
+
+    /// The trace of a job this node holds any stage of.
+    fn job_trace(&self, job_id: &JobId) -> TraceContext {
+        self.stages
+            .lock()
+            .values()
+            .find(|stage| stage.stage_id.job_id == *job_id)
+            .map(|stage| stage.trace)
+            .unwrap_or_default()
+    }
+
+    fn prepare_task_stream(&self, task_id: TaskId, hop: Hop) -> DistResult<TaskStream> {
+        // The setup below runs on the caller's task, so being in the span is
+        // enough for it; the driver and the stream are handed over.
+        let _guard = hop.enter();
         let stage_id = task_id.stage_id();
 
         let mut guard = self.stages.lock();
@@ -270,6 +392,7 @@ impl DistRuntime {
         let tx = receiver_stream_builder.tx();
         let partition = task_id.partition as usize;
         let task_ctx = self.task_ctx.clone();
+        let driver_span = Span::enter_with_parent("dist.task.driver", &hop.fr);
         let driver_task = async move {
             let mut df_stream = plan.execute(partition, task_ctx)?;
 
@@ -286,7 +409,9 @@ impl DistRuntime {
                 }
             }
             Ok(()) as DistResult<()>
-        };
+        }
+        .in_span(driver_span)
+        .instrument(hop.tr.clone());
 
         let abort_handle = receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
         stage_state.start_task(task_id.partition as usize, task_set_id, abort_handle)?;
@@ -298,15 +423,14 @@ impl DistRuntime {
             stream.map_err(DataFusionError::from),
         ));
 
-        let task_stream = TaskStream::new(
+        Ok(TaskStream::new(
             task_id,
             task_set_id,
             self.stages.clone(),
             self.event_sender.clone(),
             stream,
-        );
-
-        Ok(Box::pin(task_stream))
+            hop,
+        ))
     }
 
     pub async fn execute_remote(
@@ -320,11 +444,55 @@ impl DistRuntime {
             )));
         }
 
-        debug!("Executing remote task {task_id} on node {node_id}");
-        self.network.execute_task(node_id, task_id).await
+        let trace = self.job_trace(&task_id.job_id);
+        let hop = trace::task_hop(
+            &trace,
+            &task_id,
+            &node_id,
+            SpanContext::current_local_parent(),
+        );
+        hop.tr.follows_from(tracing::Span::current());
+        async move {
+            debug!("Executing remote task {task_id} on node {node_id}");
+            self.network.execute_task(node_id, task_id).await
+        }
+        .in_span(hop.fr)
+        .instrument(hop.tr)
+        .await
     }
 
+    /// Receive the tasks of a job on this node.
+    ///
+    /// The job id is part of the tasks — every [`TaskId`] carries it — so the
+    /// span does not have to go looking for it in the job meta. That map is the
+    /// caller's business data, and nothing in this library reads it.
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+        // A missing task list reads as an empty field rather than an error:
+        // the tasks are validated where they are used.
+        let job_id = scheduled_tasks
+            .job_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        // The context that arrived belongs to the call that delivered the tasks;
+        // the stages keep the one their own children should use.
+        let hop = trace::receive_tasks_hop(
+            &scheduled_tasks.trace,
+            &job_id,
+            &self.node_id,
+            scheduled_tasks.task_ids.len(),
+        );
+        let stage_trace = hop.child();
+        self.receive_tasks_inner(scheduled_tasks, stage_trace)
+            .in_span(hop.fr)
+            .instrument(hop.tr)
+            .await
+    }
+
+    async fn receive_tasks_inner(
+        &self,
+        scheduled_tasks: ScheduledTasks,
+        trace: TraceContext,
+    ) -> DistResult<()> {
         if matches!(*self.status.lock(), NodeStatus::Terminating) {
             return Err(DistError::internal(
                 "Local node is in Terminating status, cannot receive tasks",
@@ -348,7 +516,7 @@ impl DistRuntime {
                 .join(", ")
         );
 
-        let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
+        let stage_states = StageState::from_scheduled_tasks(scheduled_tasks, trace)?;
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         {
             let mut guard = self.stages.lock();
@@ -370,6 +538,9 @@ impl DistRuntime {
     }
 
     pub fn cleanup_local_jobs(&self, job_ids: Vec<JobId>) {
+        let hop = trace::cleanup_batch_hop(job_ids.len());
+        let _guard = hop.enter();
+
         debug!(
             "Cleaning up local Jobs [{}]",
             job_ids
@@ -479,11 +650,15 @@ pub struct StageState {
     /// Global mapping of every task in the job to its assigned node.
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     pub job_meta: Arc<HashMap<String, String>>,
+    /// The trace of the job, as this node should continue it: the context whose
+    /// `parent_span_id` is the span this node opened when it received the tasks.
+    pub trace: TraceContext,
 }
 
 impl StageState {
     pub fn from_scheduled_tasks(
         scheduled_tasks: ScheduledTasks,
+        trace: TraceContext,
     ) -> DistResult<HashMap<StageId, StageState>> {
         let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
         for task_id in scheduled_tasks.task_ids {
@@ -511,6 +686,7 @@ impl StageState {
                 task_sets: Vec::new(),
                 job_task_distribution: scheduled_tasks.job_task_distribution.clone(),
                 job_meta: scheduled_tasks.job_meta.clone(),
+                trace,
             };
             stage_states.insert(stage_id, stage_state);
         }
@@ -671,6 +847,10 @@ pub struct TaskStream {
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
     pub stream: SendableRecordBatchStream,
+    /// The spans of this task. The stream is polled, and dropped, by whoever
+    /// holds it — a tonic server, or the `ProxyExec` of the stage consuming
+    /// this one — so it carries them instead of relying on the caller's.
+    hop: Hop,
     pub output_rows: usize,
     pub output_bytes: usize,
     pub completed: bool,
@@ -683,6 +863,7 @@ impl TaskStream {
         stages: Arc<Mutex<HashMap<StageId, StageState>>>,
         event_sender: Sender<Event>,
         stream: SendableRecordBatchStream,
+        hop: Hop,
     ) -> Self {
         Self {
             task_id,
@@ -690,6 +871,7 @@ impl TaskStream {
             stages,
             event_sender,
             stream,
+            hop,
             output_rows: 0,
             output_bytes: 0,
             completed: false,
@@ -701,6 +883,7 @@ impl Stream for TaskStream {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let _guard = self.hop.enter();
         match self.stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 self.output_rows += batch.num_rows();
@@ -725,6 +908,7 @@ impl RecordBatchStream for TaskStream {
 
 impl Drop for TaskStream {
     fn drop(&mut self) {
+        let _guard = self.hop.enter();
         let task_id = self.task_id.clone();
         let task_set_id = self.task_set_id;
         let task_metrics = TaskMetrics {

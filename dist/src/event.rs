@@ -5,10 +5,12 @@ use std::{
 };
 
 use backon::{ExponentialBuilder, Retryable};
+use fastrace::future::FutureExt as _;
 use futures::future::join_all;
 use log::{debug, error, warn};
 use parking_lot::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::Instrument as _;
 
 use crate::{
     DistError, DistResult, JobId,
@@ -17,6 +19,7 @@ use crate::{
     network::{DistNetwork, StageInfo},
     planner::StageId,
     runtime::{StageState, cleanup_stages},
+    trace::{self, TraceContext},
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +33,20 @@ const MAX_BATCH_SIZE: usize = 1024;
 const EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_JOB_RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
+
+/// The trace of a job this node holds any stage of, or none if it holds none.
+///
+/// The event loop batches the events of many jobs, so the trace cannot come from
+/// the span the loop runs in: it comes from the stage state, which is where the
+/// context that arrived with the tasks is kept.
+fn job_trace(stages: &Arc<Mutex<HashMap<StageId, StageState>>>, job_id: &JobId) -> TraceContext {
+    stages
+        .lock()
+        .values()
+        .find(|stage| stage.stage_id.job_id == *job_id)
+        .map(|stage| stage.trace)
+        .unwrap_or_default()
+}
 
 fn job_check_retry_strategy() -> ExponentialBuilder {
     ExponentialBuilder::default()
@@ -140,44 +157,63 @@ impl EventHandler {
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
             let sender = self.sender.clone();
-            tokio::spawn(async move {
-                handle_check_jobs_completed(
-                    &cluster,
-                    &network,
-                    &local_stages,
-                    &sender,
-                    check_job_ids.clone(),
-                )
-                .await;
-            });
+            // Each spawn starts from no context of its own, so the operation
+            // names itself: the batch loop has mixed the jobs of many callers
+            // by the time it gets here.
+            let hop = trace::check_completed_hop(check_job_ids.len());
+            tokio::spawn(
+                async move {
+                    handle_check_jobs_completed(
+                        &cluster,
+                        &network,
+                        &local_stages,
+                        &sender,
+                        check_job_ids.clone(),
+                    )
+                    .await;
+                }
+                .in_span(hop.fr)
+                .instrument(hop.tr),
+            );
         }
 
         if !cleanup_job_ids.is_empty() {
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone()).await
-                {
-                    error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
+            let hop = trace::cleanup_batch_hop(cleanup_job_ids.len());
+            tokio::spawn(
+                async move {
+                    if let Err(e) =
+                        cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone())
+                            .await
+                    {
+                        error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
+                    }
                 }
-            });
+                .in_span(hop.fr)
+                .instrument(hop.tr),
+            );
         }
 
         if !all_stage0_ids.is_empty() {
             let local_stages = self.local_stages.clone();
             let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
             let sender = self.sender.clone();
-            tokio::spawn(async move {
-                wait_stage0_tasks_polling(
-                    &local_stages,
-                    stage0_task_poll_timeout,
-                    &sender,
-                    all_stage0_ids,
-                )
-                .await
-            });
+            let hop = trace::stage0_poll_hop(all_stage0_ids.len());
+            tokio::spawn(
+                async move {
+                    wait_stage0_tasks_polling(
+                        &local_stages,
+                        stage0_task_poll_timeout,
+                        &sender,
+                        all_stage0_ids,
+                    )
+                    .await
+                }
+                .in_span(hop.fr)
+                .instrument(hop.tr),
+            );
         }
     }
 }
@@ -196,12 +232,22 @@ async fn handle_check_jobs_completed(
         Ok(completed_map) => {
             for (job_id, completed) in completed_map {
                 if completed {
-                    debug!("Job {job_id} completed, remove it from cluster");
-                    if let Err(e) =
-                        send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
-                    {
-                        error!("Failed to send cleanup job event for job {job_id}: {e}");
+                    // The batch holds many jobs, so the line that says one of
+                    // them ended is opened in a span of its own: the trace of a
+                    // job is not the trace of the batch it was checked in.
+                    let trace = job_trace(local_stages, &job_id);
+                    let hop = trace::job_completed_hop(&trace, &job_id);
+                    async move {
+                        debug!("Job {job_id} completed, remove it from cluster");
+                        if let Err(e) =
+                            send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
+                        {
+                            error!("Failed to send cleanup job event for job {job_id}: {e}");
+                        }
                     }
+                    .in_span(hop.fr)
+                    .instrument(hop.tr)
+                    .await;
                 }
             }
         }
@@ -266,12 +312,16 @@ pub async fn check_jobs_completed(
             }
             Some(nodes) => {
                 let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
+                let hop = trace::job_cleanup_hop(&job_trace(local_stages, &job_id), &job_id);
+                let _guard = hop.enter();
                 warn!(
                     "Job {job_id} is polluted: task nodes {missing:?} are not alive, treat as completed"
                 );
                 completed_map.insert(job_id, true);
             }
             None => {
+                let hop = trace::job_cleanup_hop(&job_trace(local_stages, &job_id), &job_id);
+                let _guard = hop.enter();
                 warn!(
                     "No job_task_distribution found for job {job_id}, skipping remote status check"
                 );
@@ -385,6 +435,8 @@ pub async fn cleanup_jobs(
             Some(nodes) if nodes.is_subset(&alive_nodes) => nodes,
             Some(nodes) => {
                 let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
+                let hop = trace::job_cleanup_hop(&job_trace(local_stages, &job_id), &job_id);
+                let _guard = hop.enter();
                 warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive");
                 nodes
                     .into_iter()
@@ -447,8 +499,15 @@ async fn wait_stage0_tasks_polling(
     }
 
     for job_id in timeout_job_ids {
-        if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await {
-            error!("Failed to send CleanupJob event for job {job_id}: {e}");
+        let hop = trace::job_cleanup_hop(&job_trace(local_stages, &job_id), &job_id);
+        async move {
+            if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
+            {
+                error!("Failed to send CleanupJob event for job {job_id}: {e}");
+            }
         }
+        .in_span(hop.fr)
+        .instrument(hop.tr)
+        .await;
     }
 }
