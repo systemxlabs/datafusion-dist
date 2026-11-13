@@ -88,6 +88,21 @@ impl DistTonicServer {
 
 type BoxedDistStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
+/// The trace of the call, taken from its metadata.
+///
+/// A header that does not parse reads as no trace rather than as an error: a
+/// call with a broken `traceparent` still has tasks to run, it just runs them
+/// untraced — the same thing that happens when the caller sends none.
+fn parse_traceparent(
+    metadata: &tonic::metadata::MetadataMap,
+) -> datafusion_dist::trace::TraceContext {
+    metadata
+        .get(datafusion_dist::trace::TRACEPARENT_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(datafusion_dist::trace::TraceContext::parse)
+        .unwrap_or_default()
+}
+
 #[async_trait::async_trait]
 impl DistTonicService for DistTonicServer {
     type ExecuteTaskStream = BoxedDistStream<FlightData>;
@@ -96,9 +111,14 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<SendTasksReq>,
     ) -> Result<Response<SendTasksResp>, Status> {
+        // The trace arrives out of band, in the metadata of the call that is
+        // delivering the tasks: it names this hop, and the stages it creates
+        // derive their own span ids from it.
+        let trace = parse_traceparent(request.metadata());
         let scheduled_tasks = self
             .parse_send_tasks_req(request.into_inner())
-            .map_err(|e| Status::internal(format!("Failed to parse SendTasksReq: {e}")))?;
+            .map_err(|e| Status::internal(format!("Failed to parse SendTasksReq: {e}")))?
+            .with_trace(trace);
         self.runtime
             .receive_tasks(scheduled_tasks)
             .await

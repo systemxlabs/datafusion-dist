@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::{Future, IntoFuture},
     pin::Pin,
     sync::{
         Arc,
@@ -39,7 +40,7 @@ use crate::{
         check_initial_stage_plans, resolve_stage_plan,
     },
     scheduler::{DefaultScheduler, DisplayableTaskDistribution, DistScheduler},
-    trace,
+    trace::{self, TraceContext},
     util::{ReceiverStreamBuilder, timestamp_ms},
 };
 
@@ -133,23 +134,24 @@ impl DistRuntime {
 
     /// Submit a job for distributed execution.
     ///
-    /// The span opened here is the job's entry point in this process: a caller
-    /// that already has a span, one per request say, gets it as the parent and
-    /// every line the nodes write about this job can be read back to it.
-    pub async fn submit(
+    /// Returns a future: `.await` it as before, or name the trace the job belongs
+    /// to first with [`Submit::with_trace_context`]. The span opened on awaiting
+    /// is the job's entry point in this process; a caller that hands over a
+    /// context gets its own span as the parent, and every line the nodes write
+    /// about this job carries the same `trace_id`.
+    pub fn submit(
         &self,
         job_id: impl Into<JobId>,
         plan: Arc<dyn ExecutionPlan>,
         job_meta: Arc<HashMap<String, String>>,
-    ) -> DistResult<HashMap<TaskId, NodeId>> {
-        let job_id = job_id.into();
-        let span = trace::submit_span(&job_id);
-        // The inner future records into the span, so it gets a clone: a `Span`
-        // is a handle, and `record` is what fills in the two fields left empty
-        // at construction.
-        self.submit_inner(job_id, plan, job_meta, span.clone())
-            .instrument(span)
-            .await
+    ) -> Submit<'_> {
+        Submit {
+            runtime: self,
+            job_id: job_id.into(),
+            plan,
+            job_meta,
+            trace: TraceContext::none(),
+        }
     }
 
     async fn submit_inner(
@@ -157,6 +159,9 @@ impl DistRuntime {
         job_id: JobId,
         plan: Arc<dyn ExecutionPlan>,
         job_meta: Arc<HashMap<String, String>>,
+        // The context to hand to the children of the job's span: sending the
+        // tasks to one node is one of them.
+        job_trace: TraceContext,
         span: Span,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         debug!(
@@ -250,8 +255,17 @@ impl DistRuntime {
             );
 
             if node_id == self.node_id {
-                self.receive_tasks(scheduled_tasks).await?;
+                // Handing the tasks to ourselves is not a hop: the trace goes
+                // straight from the job's span to the one this node opens for
+                // receiving them, with no span id in between that nobody wrote.
+                self.receive_tasks(scheduled_tasks.with_trace(job_trace))
+                    .await?;
             } else {
+                // Far away it is a hop: the delivery is a span of its own, and
+                // the context the executor receives points at it, so the node
+                // that runs the tasks can say where they came from without the
+                // two sides sharing a clock.
+                let (send_trace, send_span_id) = job_trace.child();
                 debug!(
                     "Sending job {job_id} tasks [{}] to {node_id}",
                     scheduled_tasks
@@ -264,7 +278,13 @@ impl DistRuntime {
                 // The send runs on a task of its own, which is where a trace
                 // of this job would otherwise stop: neither `tokio::spawn` nor
                 // the transport below it carries the span of the caller.
-                let send_span = trace::send_tasks_span(&node_id, scheduled_tasks.task_ids.len());
+                let send_span = trace::send_tasks_span(
+                    &job_trace,
+                    send_span_id,
+                    &node_id,
+                    scheduled_tasks.task_ids.len(),
+                );
+                let scheduled_tasks = scheduled_tasks.with_trace(send_trace);
                 let network = self.network.clone();
                 let handle = tokio::spawn(
                     async move {
@@ -293,10 +313,34 @@ impl DistRuntime {
     /// and the stream that is polled by whoever fetched the task. Both carry the
     /// span themselves, because neither inherits the span of its creator.
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
-        let span = trace::task_span(&task_id, &self.node_id);
+        let trace = self.stage_trace(&task_id.stage_id());
+        let (_, span_id) = trace.child();
+        let span = trace::task_span(&trace, span_id, &task_id, &self.node_id);
+        // The task belongs to the job, and it is also the continuation of the
+        // fetch that asked for it — two facts a single parent cannot express.
+        span.follows_from(tracing::Span::current());
         let task_stream = self.prepare_task_stream(task_id, span)?;
 
         Ok(Box::pin(task_stream))
+    }
+
+    /// The trace of a stage this node holds, or none if it holds no such stage.
+    fn stage_trace(&self, stage_id: &StageId) -> TraceContext {
+        self.stages
+            .lock()
+            .get(stage_id)
+            .map(|stage| stage.trace)
+            .unwrap_or_default()
+    }
+
+    /// The trace of a job this node holds any stage of.
+    fn job_trace(&self, job_id: &JobId) -> TraceContext {
+        self.stages
+            .lock()
+            .values()
+            .find(|stage| stage.stage_id.job_id == *job_id)
+            .map(|stage| stage.trace)
+            .unwrap_or_default()
     }
 
     fn prepare_task_stream(&self, task_id: TaskId, span: Span) -> DistResult<TaskStream> {
@@ -368,7 +412,10 @@ impl DistRuntime {
             )));
         }
 
-        let span = trace::task_span(&task_id, &node_id);
+        let trace = self.job_trace(&task_id.job_id);
+        let (_, span_id) = trace.child();
+        let span = trace::task_span(&trace, span_id, &task_id, &node_id);
+        span.follows_from(tracing::Span::current());
         async move {
             debug!("Executing remote task {task_id} on node {node_id}");
             self.network.execute_task(node_id, task_id).await
@@ -389,14 +436,26 @@ impl DistRuntime {
             .job_id()
             .map(|id| id.to_string())
             .unwrap_or_default();
-        let span =
-            trace::receive_tasks_span(&job_id, &self.node_id, scheduled_tasks.task_ids.len());
-        self.receive_tasks_inner(scheduled_tasks)
+        // The context that arrived belongs to the call that delivered the tasks;
+        // the stages keep the one their own children should use.
+        let (stage_trace, span_id) = scheduled_tasks.trace.child();
+        let span = trace::receive_tasks_span(
+            &scheduled_tasks.trace,
+            span_id,
+            &job_id,
+            &self.node_id,
+            scheduled_tasks.task_ids.len(),
+        );
+        self.receive_tasks_inner(scheduled_tasks, stage_trace)
             .instrument(span)
             .await
     }
 
-    async fn receive_tasks_inner(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
+    async fn receive_tasks_inner(
+        &self,
+        scheduled_tasks: ScheduledTasks,
+        trace: TraceContext,
+    ) -> DistResult<()> {
         if matches!(*self.status.lock(), NodeStatus::Terminating) {
             return Err(DistError::internal(
                 "Local node is in Terminating status, cannot receive tasks",
@@ -420,7 +479,7 @@ impl DistRuntime {
                 .join(", ")
         );
 
-        let stage_states = StageState::from_scheduled_tasks(scheduled_tasks)?;
+        let stage_states = StageState::from_scheduled_tasks(scheduled_tasks, trace)?;
         let stage_ids = stage_states.keys().cloned().collect::<Vec<StageId>>();
         {
             let mut guard = self.stages.lock();
@@ -442,7 +501,7 @@ impl DistRuntime {
     }
 
     pub fn cleanup_local_jobs(&self, job_ids: Vec<JobId>) {
-        let span = trace::cleanup_jobs_span(job_ids.len());
+        let span = trace::cleanup_batch_span(job_ids.len());
         let _enter = span.enter();
 
         debug!(
@@ -536,6 +595,63 @@ fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
     ))
 }
 
+/// A job about to be submitted, see [`DistRuntime::submit`].
+///
+/// Awaiting it submits the job; naming its trace first is optional, which is why
+/// this is a value rather than a parameter on every `submit` call.
+#[must_use = "submitting a job does nothing until the value is awaited"]
+pub struct Submit<'a> {
+    runtime: &'a DistRuntime,
+    job_id: JobId,
+    plan: Arc<dyn ExecutionPlan>,
+    job_meta: Arc<HashMap<String, String>>,
+    trace: TraceContext,
+}
+
+impl<'a> Submit<'a> {
+    /// Trace the job with the caller's context.
+    ///
+    /// The caller's span becomes the parent of `dist.job.submit`, and every line
+    /// this job produces on every node carries the same `trace_id`. The context
+    /// is a W3C `traceparent`, so a host that already speaks it — or that took
+    /// one off an incoming request — passes it through without translation:
+    ///
+    /// ```ignore
+    /// runtime
+    ///     .submit(job_id, plan, job_meta)
+    ///     .with_trace_context(TraceContext::from_traceparent(&header)?)
+    ///     .await?;
+    /// ```
+    pub fn with_trace_context(mut self, trace: TraceContext) -> Self {
+        self.trace = trace;
+        self
+    }
+}
+
+impl<'a> IntoFuture for Submit<'a> {
+    type Output = DistResult<HashMap<TaskId, NodeId>>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            // The span of this node's view of the job, and the context its
+            // children inherit: the caller's span is the parent of both.
+            let (job_trace, span_id) = self.trace.child();
+            let span = trace::submit_span(&self.trace, span_id, &self.job_id);
+            self.runtime
+                .submit_inner(
+                    self.job_id,
+                    self.plan,
+                    self.job_meta,
+                    job_trace,
+                    span.clone(),
+                )
+                .instrument(span)
+                .await
+        })
+    }
+}
+
 /// Tracks the runtime state of a single execution stage on the local node.
 #[derive(Debug)]
 pub struct StageState {
@@ -554,11 +670,15 @@ pub struct StageState {
     /// Global mapping of every task in the job to its assigned node.
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     pub job_meta: Arc<HashMap<String, String>>,
+    /// The trace of the job, as this node should continue it: the context whose
+    /// `parent_span_id` is the span this node opened when it received the tasks.
+    pub trace: TraceContext,
 }
 
 impl StageState {
     pub fn from_scheduled_tasks(
         scheduled_tasks: ScheduledTasks,
+        trace: TraceContext,
     ) -> DistResult<HashMap<StageId, StageState>> {
         let mut stage_tasks: HashMap<StageId, HashSet<TaskId>> = HashMap::new();
         for task_id in scheduled_tasks.task_ids {
@@ -586,6 +706,7 @@ impl StageState {
                 task_sets: Vec::new(),
                 job_task_distribution: scheduled_tasks.job_task_distribution.clone(),
                 job_meta: scheduled_tasks.job_meta.clone(),
+                trace,
             };
             stage_states.insert(stage_id, stage_state);
         }
