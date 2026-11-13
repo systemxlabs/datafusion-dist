@@ -8,6 +8,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     stream::RecordBatchStreamAdapter,
 };
+use fastrace::prelude::*;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 
@@ -152,12 +153,18 @@ impl DisplayAs for ProxyExec {
     }
 }
 
+#[fastrace::trace(name = "dist.proxy.get_df_batch_stream")]
 async fn get_df_batch_stream(
     runtime: DistRuntime,
     node_id: NodeId,
     task_id: TaskId,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream, DataFusionError> {
+    LocalSpan::add_property(|| ("node", node_id.to_string()));
+    LocalSpan::add_property(|| ("job_id", task_id.job_id.to_string()));
+    LocalSpan::add_property(|| ("stage", task_id.stage.to_string()));
+    LocalSpan::add_property(|| ("partition", task_id.partition.to_string()));
+
     let dist_stream = if node_id == runtime.node_id {
         runtime.execute_local(task_id).await?
     } else {

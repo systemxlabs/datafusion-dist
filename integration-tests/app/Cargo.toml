@@ -17,6 +17,8 @@ arrow-flight = { workspace = true, features = ["flight-sql-experimental"] }
 async-trait = { workspace = true }
 base64 = "0.22"
 env_logger = { workspace = true }
+fastrace = { workspace = true, features = ["enable"] }
+fastrace-tonic = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 futures = { workspace = true }

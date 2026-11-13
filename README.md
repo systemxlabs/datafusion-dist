@@ -67,6 +67,71 @@ CoalesceBatchesExec: target_batch_size=8192
 - Extensible scheduler for custom task scheduling
 - Extensible executor for custom task execution
 
+## Tracing
+
+The library is instrumented with [fastrace](https://github.com/fast/fastrace). Libraries
+depending on `datafusion-dist` do not need to enable anything: instrumentation compiles to
+no-ops unless the application turns tracing on, so it has zero cost by default.
+
+To collect traces, enable the `enable` feature and install a reporter in the application:
+
+```toml
+[dependencies]
+fastrace = { version = "0.7", features = ["enable"] }
+```
+
+```rust,ignore
+fastrace::set_reporter(
+    fastrace::collector::ConsoleReporter,
+    fastrace::collector::Config::default(),
+);
+
+// ... run the application ...
+
+fastrace::flush();
+```
+
+Spans are only recorded when there is an active parent span. To trace a query end to end,
+start a root span in the request handler (or let `fastrace-tonic` do it, see below) and run
+the handler future with `fastrace::future::FutureExt::in_span`.
+
+### Distributed context propagation
+
+`datafusion-dist-network-tonic` injects the W3C `traceparent` header into every RPC it
+sends. To continue traces on the receiving side, add `FastraceServerLayer` to the tonic
+servers of each node:
+
+```rust,ignore
+use fastrace_tonic::FastraceServerLayer;
+use tonic::transport::Server;
+
+Server::builder()
+    .layer(FastraceServerLayer::default())
+    .add_service(DistTonicServiceServer::new(service))
+    .serve(addr)
+    .await?;
+```
+
+With the default extractor, requests without a `traceparent` header start a new trace,
+so every incoming request is traced once a reporter is installed.
+
+### Instrumented spans
+
+| Span | Key properties |
+| --- | --- |
+| `dist.runtime.submit` | `job_id` |
+| `dist.planner.plan_stages` | `job_id` |
+| `dist.scheduler.schedule` | `local_node`, `nodes`, `stages` |
+| `dist.network.send_tasks` | `node`, `tasks`, `job_id` |
+| `dist.runtime.receive_tasks` | `job_id` |
+| `dist.runtime.execute_local` | `job_id`, `stage`, `partition` |
+| `dist.task.execute` | task execution on the executor runtime |
+| `dist.runtime.execute_remote` | `node`, `job_id`, `stage`, `partition` |
+| `dist.network.execute_task` | `node`, `job_id`, `stage`, `partition` |
+| `dist.proxy.get_df_batch_stream` | `node`, `job_id`, `stage`, `partition` |
+| `dist.network.get_jobs` | `node` |
+| `dist.network.cleanup_jobs` | `node`, `jobs` |
+
 ## Project Structure
 
 ```

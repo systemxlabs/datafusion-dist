@@ -12,6 +12,7 @@ use datafusion_physical_plan::{
     joins::{HashJoinExec, PartitionMode},
     sorts::sort::SortExec,
 };
+use fastrace::prelude::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
@@ -78,11 +79,14 @@ impl Display for TaskId {
 pub struct DefaultPlanner;
 
 impl DistPlanner for DefaultPlanner {
+    #[fastrace::trace(name = "dist.planner.plan_stages")]
     fn plan_stages(
         &self,
         job_id: JobId,
         plan: Arc<dyn ExecutionPlan>,
     ) -> DistResult<HashMap<StageId, Arc<dyn ExecutionPlan>>> {
+        LocalSpan::add_property(|| ("job_id", job_id.to_string()));
+
         let mut stage_count = 0u32;
         let plan = plan
             .transform_up(|node| {

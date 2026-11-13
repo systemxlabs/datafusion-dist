@@ -28,6 +28,7 @@ use datafusion_dist_network_tonic::{
     server::DistTonicServer,
 };
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use fastrace_tonic::FastraceServerLayer;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
 use tonic::{Request, Response, Status, Streaming, metadata::MetadataValue, transport::Server};
@@ -36,6 +37,15 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+
+    // Tracing is disabled unless a reporter is installed. Set `FASTRACE_CONSOLE`
+    // to print collected traces to stderr.
+    if std::env::var_os("FASTRACE_CONSOLE").is_some() {
+        fastrace::set_reporter(
+            fastrace::collector::ConsoleReporter,
+            fastrace::collector::Config::default(),
+        );
+    }
 
     let port = 50050u16;
 
@@ -71,6 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dist_tonic_service =
         DistTonicServer::new(runtime.clone(), ctx.task_ctx(), app_extension_codec.clone());
     let dist_tonic_server = Server::builder()
+        .layer(FastraceServerLayer::default())
         .add_service(DistTonicServiceServer::new(dist_tonic_service))
         .serve("[::]:50050".parse()?);
 
@@ -79,6 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime: runtime.clone(),
     };
     let test_flight_server = Server::builder()
+        .layer(FastraceServerLayer::default())
         .add_service(FlightServiceServer::new(test_flight_sql_service))
         .serve("[::]:50051".parse()?);
 
@@ -94,6 +106,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    fastrace::flush();
     Ok(())
 }
 
