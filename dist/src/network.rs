@@ -13,6 +13,7 @@ use crate::{
     cluster::NodeId,
     planner::{StageId, TaskId},
     runtime::{StageState, TaskMetrics, TaskSet},
+    trace::TraceContext,
 };
 
 #[async_trait::async_trait]
@@ -26,6 +27,25 @@ pub trait DistNetwork: Debug + Send + Sync {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream>;
+
+    /// As [`DistNetwork::execute_task`], for a caller that has a trace to
+    /// announce: the context of the hop that asks for the task, whose span the
+    /// execution becomes a child of on the other side.
+    ///
+    /// A transport that cannot carry a context ignores it and runs the task as
+    /// [`DistNetwork::execute_task`] would; the task then continues the trace its
+    /// job was received with, which is the same trace, one link shorter. That is
+    /// why this has a body: a transport added later needs no change to be correct,
+    /// only a change to be complete.
+    async fn execute_task_with_trace(
+        &self,
+        node_id: NodeId,
+        task_id: TaskId,
+        trace: TraceContext,
+    ) -> DistResult<SendableRecordBatchStream> {
+        let _ = trace;
+        self.execute_task(node_id, task_id).await
+    }
 
     async fn get_jobs(
         &self,
@@ -41,6 +61,14 @@ pub struct ScheduledTasks {
     pub task_ids: Vec<TaskId>,
     pub job_task_distribution: Arc<HashMap<TaskId, NodeId>>,
     pub job_meta: Arc<HashMap<String, String>>,
+    /// The trace of the job, as the node that sends these tasks hands it over.
+    ///
+    /// It is this hop's context, not the job's: the receiving node derives its
+    /// own span id from it, so the ids of a job form a tree across processes
+    /// without either side knowing the other's. It stays in core rather than in
+    /// the transport because a node that receives tasks on a transport without
+    /// headers must be able to carry it some other way.
+    pub trace: TraceContext,
 }
 
 impl ScheduledTasks {
@@ -55,7 +83,14 @@ impl ScheduledTasks {
             task_ids,
             job_task_distribution,
             job_meta,
+            trace: TraceContext::none(),
         }
+    }
+
+    /// Attach the trace of the job being distributed.
+    pub fn with_trace(mut self, trace: TraceContext) -> Self {
+        self.trace = trace;
+        self
     }
 
     pub fn job_id(&self) -> DistResult<JobId> {

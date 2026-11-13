@@ -1475,6 +1475,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -1554,6 +1555,7 @@ dependencies = [
  "datafusion-proto",
  "futures",
  "prost",
+ "tokio",
  "tonic",
  "tonic-prost",
  "uuid",
