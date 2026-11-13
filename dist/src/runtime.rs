@@ -59,14 +59,6 @@ pub struct DistRuntime {
     pub heartbeater: Arc<Heartbeater>,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
-    /// The trace of each job this node holds a stage of.
-    ///
-    /// Kept in step with `stages` — inserted when the tasks of a job arrive,
-    /// dropped wherever its stages are — so that the trace of a job is a lookup
-    /// rather than a scan of every stage, which is what `execute_remote` would
-    /// otherwise pay once per fetched partition. Private: it is a shortcut for
-    /// [`DistRuntime::job_trace_of`], not a second source of truth.
-    job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
 }
 
 impl DistRuntime {
@@ -89,14 +81,11 @@ impl DistRuntime {
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(config.event_queue_size);
 
-        let job_traces = Arc::new(Mutex::new(HashMap::new()));
-
         let event_handler = EventHandler {
             config: config.clone(),
             cluster: cluster.clone(),
             network: network.clone(),
             local_stages: stages.clone(),
-            job_traces: job_traces.clone(),
             sender: sender.clone(),
             receiver,
         };
@@ -115,7 +104,6 @@ impl DistRuntime {
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
-            job_traces,
         }
     }
 
@@ -133,11 +121,7 @@ impl DistRuntime {
 
     pub async fn start(&self) {
         self.heartbeater.start();
-        start_stage_cleaner(
-            self.stages.clone(),
-            self.job_traces.clone(),
-            self.config.clone(),
-        );
+        start_stage_cleaner(self.stages.clone(), self.config.clone());
     }
 
     pub async fn shutdown(&self) {
@@ -162,13 +146,14 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> Submit<'_> {
         Submit {
-            state: SubmitState::Pending(SubmitParts {
+            parts: Some(SubmitParts {
                 runtime: self,
                 job_id: job_id.into(),
                 plan,
                 job_meta,
                 trace: TraceContext::none(),
             }),
+            inner: None,
         }
     }
 
@@ -177,11 +162,12 @@ impl DistRuntime {
         job_id: JobId,
         plan: Arc<dyn ExecutionPlan>,
         job_meta: Arc<HashMap<String, String>>,
-        // The context to hand to the children of the job's span: sending the
-        // tasks to one node is one of them.
-        job_trace: TraceContext,
-        span: Span,
+        // The hop of the job on the submitting node: its context is what the
+        // children of the job's span continue, and sending the tasks to one node
+        // is one of those children.
+        job_hop: trace::Hop,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
+        let job_trace = job_hop.ctx;
         debug!(
             "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
@@ -195,8 +181,9 @@ impl DistRuntime {
         check_initial_stage_plans(job_id.clone(), &stage_plans)?;
 
         let node_states = self.cluster.alive_nodes().await?;
-        span.record("stages", stage_plans.len());
-        span.record("nodes", node_states.len());
+        // Known only now, so recorded onto the span rather than created with it.
+        job_hop.span.record("stages", stage_plans.len());
+        job_hop.span.record("nodes", node_states.len());
         debug!(
             "alive nodes: {}",
             node_states
@@ -283,7 +270,8 @@ impl DistRuntime {
                 // the context the executor receives points at it, so the node
                 // that runs the tasks can say where they came from without the
                 // two sides sharing a clock.
-                let (send_trace, send_span_id) = job_trace.child();
+                let send_hop =
+                    trace::send_tasks_hop(job_trace, &node_id, scheduled_tasks.task_ids.len());
                 debug!(
                     "Sending job {job_id} tasks [{}] to {node_id}",
                     scheduled_tasks
@@ -296,20 +284,14 @@ impl DistRuntime {
                 // The send runs on a task of its own, which is where a trace
                 // of this job would otherwise stop: neither `tokio::spawn` nor
                 // the transport below it carries the span of the caller.
-                let send_span = trace::send_tasks_span(
-                    &job_trace,
-                    send_span_id,
-                    &node_id,
-                    scheduled_tasks.task_ids.len(),
-                );
-                let scheduled_tasks = scheduled_tasks.with_trace(send_trace);
+                let scheduled_tasks = scheduled_tasks.with_trace(send_hop.ctx);
                 let network = self.network.clone();
                 let handle = tokio::spawn(
                     async move {
                         network.send_tasks(node_id.clone(), scheduled_tasks).await?;
                         Ok::<_, DistError>(())
                     }
-                    .instrument(send_span),
+                    .instrument(send_hop.span),
                 );
                 handles.push(handle);
             }
@@ -358,12 +340,11 @@ impl DistRuntime {
             Some(parent) if !parent.is_none() => parent,
             _ => self.stage_trace(&task_id.stage_id()),
         };
-        let (_, span_id) = trace.child();
-        let span = trace::task_span(&trace, span_id, &task_id, &self.node_id);
+        let hop = trace::task_hop(trace, &task_id, &self.node_id);
         // The task belongs to the job, and it is also the continuation of the
         // fetch that asked for it — two facts a single parent cannot express.
-        span.follows_from(tracing::Span::current());
-        let task_stream = self.prepare_task_stream(task_id, span)?;
+        hop.span.follows_from(tracing::Span::current());
+        let task_stream = self.prepare_task_stream(task_id, hop)?;
 
         Ok(Box::pin(task_stream))
     }
@@ -384,8 +365,17 @@ impl DistRuntime {
     ///
     /// `None` when the job is unknown here, which is also what a job looks like
     /// after its stages were cleaned up.
+    ///
+    /// One scan of the stages, which is what a fetch of a remote task would pay
+    /// per partition — so the per-partition path does not call this: it reads the
+    /// hop of the task it runs under (`trace::current_hop`), and this is what
+    /// is left for a caller with no task of its own.
     pub fn job_trace_of(&self, job_id: &JobId) -> Option<TraceContext> {
-        job_trace(&self.stages, &self.job_traces, job_id)
+        self.stages
+            .lock()
+            .values()
+            .find(|stage| stage.stage_id.job_id == *job_id)
+            .map(|stage| stage.trace)
     }
 
     /// The trace of a stage this node holds, or none if it holds no such stage.
@@ -397,9 +387,10 @@ impl DistRuntime {
             .unwrap_or_default()
     }
 
-    fn prepare_task_stream(&self, task_id: TaskId, span: Span) -> DistResult<TaskStream> {
+    fn prepare_task_stream(&self, task_id: TaskId, hop: trace::Hop) -> DistResult<TaskStream> {
         // The setup below runs on the caller's task, so being in the span is
         // enough for it; the driver and the stream are handed over.
+        let span = hop.span.clone();
         let _enter = span.clone().entered();
         let stage_id = task_id.stage_id();
 
@@ -435,7 +426,11 @@ impl DistRuntime {
         }
         .instrument(span.clone());
 
-        let abort_handle = receiver_stream_builder.spawn_on(driver_task, self.executor.handle());
+        // The driver is a task of its own, so it gets the hop as a scope rather
+        // than as an enclosing span: a plan that fetches another node's output
+        // runs inside it, and asks the scope whose work it is doing.
+        let driver = trace::in_hop(hop, driver_task);
+        let abort_handle = receiver_stream_builder.spawn_on(driver, self.executor.handle());
         stage_state.start_task(task_id.partition as usize, task_set_id, abort_handle)?;
         drop(guard);
 
@@ -466,19 +461,31 @@ impl DistRuntime {
             )));
         }
 
-        let trace = self.job_trace_of(&task_id.job_id).unwrap_or_default();
+        // Whose read caused this fetch: the hop of the task this runs under,
+        // which is the consumer's own `dist.task.execute` on this node. It is
+        // read from the scope, so no lookup and no second copy of the trace.
+        let caller = trace::current_hop();
+        let (parent, link_span_id) = match caller {
+            Some(hop) => (hop.ctx, hop.span_id),
+            // No scope: a host called this directly. The task still belongs to
+            // its job, so the job's own trace is the next best parent.
+            None => (self.job_trace_of(&task_id.job_id).unwrap_or_default(), None),
+        };
         // The hop the callee should treat as its parent is the span opened right
         // here, so the ids of the fetch and of the execution it causes line up.
-        let (hop, span_id) = trace.child();
-        let span = trace::task_fetch_span(&trace, span_id, &task_id, &node_id);
-        span.follows_from(tracing::Span::current());
+        let hop = trace::fetch_hop(parent, &task_id, &node_id, link_span_id);
+        // A parent cannot say "this read is what caused it", so the local span is
+        // named in a field of its own: a log line shows the edge a tracer backend
+        // would only draw.
+        hop.span.follows_from(tracing::Span::current());
+        let outgoing = hop.ctx;
         async move {
             debug!("Executing remote task {task_id} on node {node_id}");
             self.network
-                .execute_task_with_trace(node_id, task_id, hop)
+                .execute_task_with_trace(node_id, task_id, outgoing)
                 .await
         }
-        .instrument(span)
+        .instrument(hop.span)
         .await
     }
 
@@ -496,17 +503,19 @@ impl DistRuntime {
             .unwrap_or_default();
         // The context that arrived belongs to the call that delivered the tasks;
         // the stages keep the one their own children should use.
-        let (stage_trace, span_id) = scheduled_tasks.trace.child();
-        let span = trace::receive_tasks_span(
-            &scheduled_tasks.trace,
-            span_id,
+        let hop = trace::receive_tasks_hop(
+            scheduled_tasks.trace,
             &job_id,
             &self.node_id,
             scheduled_tasks.task_ids.len(),
         );
-        self.receive_tasks_inner(scheduled_tasks, stage_trace)
-            .instrument(span)
-            .await
+        // The stages keep the context their own children continue, which is the
+        // one this hop hands down.
+        let stage_trace = hop.ctx;
+        let inner = self
+            .receive_tasks_inner(scheduled_tasks, stage_trace)
+            .instrument(hop.span.clone());
+        trace::in_hop(hop, inner).await
     }
 
     async fn receive_tasks_inner(
@@ -544,14 +553,6 @@ impl DistRuntime {
             guard.extend(stage_states);
             drop(guard);
         }
-        // The index of a job's trace follows its stages in, and out.
-        for stage_id in &stage_ids {
-            self.job_traces
-                .lock()
-                .entry(stage_id.job_id.clone())
-                .or_insert(trace);
-        }
-
         let stage0_ids = stage_ids
             .iter()
             .filter(|id| id.stage == 0)
@@ -585,10 +586,6 @@ impl DistRuntime {
         cleanup_stages(&mut self.stages.lock(), |stage_id| {
             job_ids.contains(&stage_id.job_id)
         });
-        let mut job_traces = self.job_traces.lock();
-        for job_id in &job_ids {
-            job_traces.remove(job_id);
-        }
     }
 
     pub fn get_local_jobs(&self, job_ids: Option<&Vec<JobId>>) -> HashMap<StageId, StageInfo> {
@@ -674,16 +671,10 @@ fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
 /// `async fn submit` — keeps working.
 #[must_use = "submitting a job does nothing until the value is awaited"]
 pub struct Submit<'a> {
-    state: SubmitState<'a>,
-}
-
-/// Where a [`Submit`] is: naming its trace happens before the first poll, and
-/// polling is what turns the parts into the future that runs the job.
-enum SubmitState<'a> {
-    Pending(SubmitParts<'a>),
+    parts: Option<SubmitParts<'a>>,
     /// Built on the first poll: [`Future::poll`] is the only place where the
     /// fields can be moved out, since `with_trace_context` runs before it.
-    Started(BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>>),
+    inner: Option<BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>>>,
 }
 
 struct SubmitParts<'a> {
@@ -716,25 +707,22 @@ impl<'a> Submit<'a> {
     /// It has to be called before the value is awaited: once the job is running
     /// its trace is in the wild, and naming another one could only be ignored.
     pub fn with_trace_context(mut self, trace: TraceContext) -> Self {
-        match self.state {
-            SubmitState::Pending(ref mut parts) => parts.trace = trace,
-            SubmitState::Started(_) => debug_assert!(
-                false,
-                "with_trace_context is called before the job is awaited"
-            ),
+        // Unreachable in practice — the value is neither `Clone` nor polled
+        // before this — but it is a public method, and losing a context quietly
+        // is the kind of thing that shows up as an empty column much later.
+        debug_assert!(
+            self.parts.is_some(),
+            "with_trace_context is called before the job is awaited"
+        );
+        if let Some(parts) = self.parts.as_mut() {
+            parts.trace = trace;
         }
         self
     }
 
     /// The submitted job, as the future that polls it.
     fn start(&mut self) -> BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>> {
-        let parts = match std::mem::replace(
-            &mut self.state,
-            SubmitState::Started(Box::pin(std::future::pending())),
-        ) {
-            SubmitState::Pending(parts) => parts,
-            SubmitState::Started(_) => unreachable!("a submit future is started once"),
-        };
+        let parts = self.parts.take().expect("a submit future is started once");
         Box::pin(async move {
             let SubmitParts {
                 runtime,
@@ -743,14 +731,18 @@ impl<'a> Submit<'a> {
                 job_meta,
                 trace,
             } = parts;
-            // The span of this node's view of the job, and the context its
-            // children inherit: the caller's span is the parent of both.
-            let (job_trace, span_id) = trace.child();
-            let span = trace::submit_span(&trace, span_id, &job_id);
-            runtime
-                .submit_inner(job_id, plan, job_meta, job_trace, span.clone())
-                .instrument(span)
-                .await
+            // The hop of this node's view of the job; the caller's span is its
+            // parent, and its context is what the job's children continue.
+            let hop = trace::submit_hop(trace, &job_id);
+            let span = hop.span.clone();
+            let scope = hop.clone();
+            trace::in_hop(
+                scope,
+                runtime
+                    .submit_inner(job_id, plan, job_meta, hop)
+                    .instrument(span),
+            )
+            .await
         })
     }
 }
@@ -760,14 +752,10 @@ impl<'a> Future for Submit<'a> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().get_mut();
-        if matches!(this.state, SubmitState::Pending(_)) {
-            let inner = this.start();
-            this.state = SubmitState::Started(inner);
+        if this.inner.is_none() {
+            this.inner = Some(this.start());
         }
-        match this.state {
-            SubmitState::Started(ref mut inner) => inner.as_mut().poll(cx),
-            SubmitState::Pending(_) => unreachable!("just started"),
-        }
+        this.inner.as_mut().expect("set above").as_mut().poll(cx)
     }
 }
 
@@ -1108,11 +1096,7 @@ fn stages_to_clean(
     (expired, inactive)
 }
 
-fn start_stage_cleaner(
-    stages: Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
-    config: Arc<DistConfig>,
-) {
+fn start_stage_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: Arc<DistConfig>) {
     tokio::spawn(async move {
         let display_ids = |ids: &[StageId]| {
             ids.iter()
@@ -1145,40 +1129,9 @@ fn start_stage_cleaner(
                 cleanup_stages(&mut guard, |stage_id| inactive.contains(stage_id));
             }
 
-            // The trace index follows the stages out: what is no longer here
-            // cannot be joined to anything. It is dropped per job rather than
-            // per stage, so a job with another stage still alive loses its entry
-            // too — `job_trace` then reads the stages once and files the answer
-            // again, which costs one scan and is never wrong.
-            for stage_id in expired.iter().chain(inactive.iter()) {
-                job_traces.lock().remove(&stage_id.job_id);
-            }
             drop(guard);
         }
     });
-}
-
-/// The trace of a job this node holds any stage of.
-///
-/// The index is read first, so the lookup does not scan every stage — which is
-/// what a fetch of a remote task would otherwise pay once per partition. A miss
-/// falls back to the stages, which is where the context lives, and fills the
-/// index in: the index is a shortcut, not a second source of truth.
-pub(crate) fn job_trace(
-    stages: &Mutex<HashMap<StageId, StageState>>,
-    index: &Mutex<HashMap<JobId, TraceContext>>,
-    job_id: &JobId,
-) -> Option<TraceContext> {
-    if let Some(trace) = index.lock().get(job_id) {
-        return Some(*trace);
-    }
-    let trace = stages
-        .lock()
-        .values()
-        .find(|stage| stage.stage_id.job_id == *job_id)
-        .map(|stage| stage.trace)?;
-    index.lock().insert(job_id.clone(), trace);
-    Some(trace)
 }
 
 pub(crate) fn cleanup_stages(

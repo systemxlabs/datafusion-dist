@@ -47,13 +47,15 @@
 //! `dist.job.submit`, for instance — are recorded onto the span afterwards, and
 //! a subscriber needs `on_record` to see those.
 //!
-//! # What this module does not do
+//! Every span carries all three, inner spans included, so a sink that prefers
+//! the closest one over the outermost can pick the innermost span of a line and
+//! still get a complete set of ids.
 //!
-//! `tracing` is a hard dependency: the crate logs through `log` and the host may
-//! bridge it, but the spans are created unconditionally, and a disabled span is
-//! cheap rather than free. Make it an optional, default-on feature if a host
-//! ever needs the span creation compiled out; that also needs the spans to be
-//! gated one by one, so it is a separate change.
+//! One field goes beyond the three: `dist.task.fetch` carries `link_span_id`,
+//! the span of the local task whose read caused this fetch — the edge from the
+//! consumer's work to the fetch, which a parent cannot express. It is empty when
+//! there was no such span, e.g. when a host called the runtime directly with no
+//! task of its own.
 //!
 //! [`DistRuntime::submit`]: crate::runtime::DistRuntime::submit
 //! [`DistRuntime::execute_local`]: crate::runtime::DistRuntime::execute_local
@@ -363,71 +365,132 @@ pub(crate) fn span_id_hex(span_id: Option<[u8; 8]>) -> String {
     span_id.map(hex).unwrap_or_default()
 }
 
-/// The span covering [`DistRuntime::submit`]: the job as the submitting node
+/// One hop of a trace: the span that names it, the context its children go on
+/// with, and the ids it logs.
+///
+/// The three belong together and are wrong apart — a span whose `span_id` is not
+/// the one the context announces leaves a `parent_span_id` that no span ever
+/// wrote, which is worse than no trace at all. So they are produced in one place,
+/// the [`hop!`] macro, and a new span cannot be added with one of the three
+/// fields a log query reads missing.
+#[derive(Clone, Debug)]
+pub(crate) struct Hop {
+    /// What a child of this hop is built from: the same trace, with this hop's
+    /// span as the parent.
+    pub ctx: TraceContext,
+    /// This hop, as the tracer sees it.
+    pub span: Span,
+    /// This hop's span id, for the places that name it from outside a span —
+    /// the `traceparent` of a call, the `link_span_id` of a fetch.
+    pub span_id: Option<[u8; 8]>,
+}
+
+/// Build a [`Hop`]: derive the child context, open the span, keep the id.
+///
+/// The three fields every span carries are written here once, which is the whole
+/// point: they used to be three lines to copy into each of eight span
+/// constructors, and a fourth constructor added without them compiled fine and
+/// only lost a column in the host's log.
+macro_rules! hop {
+    ($level:expr, $name:expr, $parent:expr, $($field:tt)*) => {{
+        let parent: TraceContext = $parent;
+        let (ctx, span_id) = parent.child();
+        Hop {
+            span: tracing::span!(
+                $level,
+                $name,
+                trace_id = %parent.trace_id_hex(),
+                span_id = %crate::trace::span_id_hex(span_id),
+                parent_span_id = %parent.parent_span_id_hex(),
+                $($field)*
+            ),
+            ctx,
+            span_id,
+        }
+    }};
+}
+
+tokio::task_local! {
+    /// The hop the current tokio task is working under.
+    ///
+    /// A span follows neither a future into `tokio::spawn` nor a stream into
+    /// whoever polls it, and dist runs every task on a runtime of its own. So a
+    /// task that needs to know whose work it is doing — the driver of a stage
+    /// that fetches another node's output — finds it here instead of in an
+    /// argument threaded down from the submitter: this is the environment a
+    /// context is, rather than the parameter it is not.
+    ///
+    /// Installed by [`in_hop`] where work starts (submit, receive, the driver of
+    /// a task), read by [`current_hop`].
+    static CURRENT_HOP: Hop;
+}
+
+/// The hop this task is working under, if one was installed.
+pub(crate) fn current_hop() -> Option<Hop> {
+    CURRENT_HOP.try_with(Hop::clone).ok()
+}
+
+/// Run a future as the given hop.
+///
+/// Everything that starts work on a runtime of its own wraps it in this: the
+/// scope, unlike a span, reaches the task that is spawned.
+pub(crate) fn in_hop<F>(hop: Hop, f: F) -> impl std::future::Future<Output = F::Output>
+where
+    F: std::future::Future,
+{
+    CURRENT_HOP.scope(hop, f)
+}
+
+/// The hop covering [`DistRuntime::submit`]: the job as the submitting node
 /// sees it. `stages` and `nodes` are recorded once the plan has been staged and
 /// the tasks distributed.
 ///
 /// [`DistRuntime::submit`]: crate::runtime::DistRuntime::submit
-pub(crate) fn submit_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
-    tracing::info_span!(
+pub(crate) fn submit_hop(parent: TraceContext, job_id: &str) -> Hop {
+    hop!(
+        tracing::Level::INFO,
         span_name::JOB_SUBMIT,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %job_id,
         stages = tracing::field::Empty,
         nodes = tracing::field::Empty,
     )
 }
 
-/// The span covering delivery of the tasks of one job to one node.
-pub(crate) fn send_tasks_span(
-    ctx: &TraceContext,
-    span_id: Option<[u8; 8]>,
-    node_id: &NodeId,
-    tasks: usize,
-) -> Span {
-    tracing::debug_span!(
+/// The hop covering delivery of the tasks of one job to one node.
+pub(crate) fn send_tasks_hop(parent: TraceContext, node_id: &NodeId, tasks: usize) -> Hop {
+    hop!(
+        tracing::Level::DEBUG,
         span_name::JOB_SEND_TASKS,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         node_id = %node_id,
         tasks,
     )
 }
 
-/// The span covering a node receiving the tasks of a job.
-pub(crate) fn receive_tasks_span(
-    ctx: &TraceContext,
-    span_id: Option<[u8; 8]>,
+/// The hop covering a node receiving the tasks of a job.
+pub(crate) fn receive_tasks_hop(
+    parent: TraceContext,
     job_id: &str,
     node_id: &NodeId,
     tasks: usize,
-) -> Span {
-    tracing::debug_span!(
+) -> Hop {
+    hop!(
+        tracing::Level::DEBUG,
         span_name::JOB_RECEIVE_TASKS,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %job_id,
         node_id = %node_id,
         tasks,
     )
 }
 
-/// The span covering the execution of one task on the node that runs it.
-pub(crate) fn task_span(
-    ctx: &TraceContext,
-    span_id: Option<[u8; 8]>,
-    task_id: &TaskId,
-    node_id: &NodeId,
-) -> Span {
-    tracing::debug_span!(
+/// The hop covering the execution of one task on the node that runs it.
+pub(crate) fn task_hop(parent: TraceContext, task_id: &TaskId, node_id: &NodeId) -> Hop {
+    hop!(
+        tracing::Level::DEBUG,
         span_name::TASK_EXECUTE,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %task_id.job_id,
         stage = task_id.stage,
         partition = task_id.partition,
@@ -435,66 +498,61 @@ pub(crate) fn task_span(
     )
 }
 
-/// The span covering the fetch of a task's output from another node, on the node
+/// The hop covering the fetch of a task's output from another node, on the node
 /// that consumes it.
 ///
 /// Named apart from [`span_name::TASK_EXECUTE`]: the two happen for the same
 /// task, in the same trace, on different nodes, and a shared name would read as
-/// one task executed twice.
-pub(crate) fn task_fetch_span(
-    ctx: &TraceContext,
-    span_id: Option<[u8; 8]>,
+/// one task executed twice. `link_span_id` names the local span whose read
+/// caused the fetch, which is an edge a parent cannot express — empty when the
+/// fetch was not caused by a span of ours.
+pub(crate) fn fetch_hop(
+    parent: TraceContext,
     task_id: &TaskId,
     node_id: &NodeId,
-) -> Span {
-    tracing::debug_span!(
+    link_span_id: Option<[u8; 8]>,
+) -> Hop {
+    hop!(
+        tracing::Level::DEBUG,
         span_name::TASK_FETCH,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %task_id.job_id,
         stage = task_id.stage,
         partition = task_id.partition,
         node_id = %node_id,
+        link_span_id = %span_id_hex(link_span_id),
     )
 }
 
-/// The span covering the reporting of one job's completion, so that the line
+/// The hop covering the reporting of one job's completion, so that the line
 /// that says a job ended names the job and the trace even though the batch it
 /// was checked in held many.
-pub(crate) fn job_completed_span(
-    ctx: &TraceContext,
-    span_id: Option<[u8; 8]>,
-    job_id: &str,
-) -> Span {
-    tracing::info_span!(
+pub(crate) fn job_completed_hop(parent: TraceContext, job_id: &str) -> Hop {
+    hop!(
+        tracing::Level::INFO,
         span_name::JOB_COMPLETED,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %job_id,
     )
 }
 
-/// The span covering the cleanup of one job on the nodes that ran it.
-pub(crate) fn job_cleanup_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
-    tracing::info_span!(
+/// The hop covering the cleanup of one job on the nodes that ran it.
+pub(crate) fn job_cleanup_hop(parent: TraceContext, job_id: &str) -> Hop {
+    hop!(
+        tracing::Level::INFO,
         span_name::JOB_CLEANUP,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %job_id,
     )
 }
 
-/// The span covering the check that gave up on one job -- its nodes are gone, or
+/// The hop covering the check that gave up on one job -- its nodes are gone, or
 /// its task distribution was never seen.
-pub(crate) fn job_check_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
-    tracing::info_span!(
+pub(crate) fn job_check_hop(parent: TraceContext, job_id: &str) -> Hop {
+    hop!(
+        tracing::Level::INFO,
         span_name::JOB_CHECK_COMPLETED,
-        trace_id = %ctx.trace_id_hex(),
-        span_id = %span_id_hex(span_id),
-        parent_span_id = %ctx.parent_span_id_hex(),
+        parent,
         job_id = %job_id,
     )
 }
@@ -787,6 +845,131 @@ mod tests {
             _job_ids: Vec<crate::JobId>,
         ) -> DistResult<()> {
             Err(DistError::internal("single node test"))
+        }
+    }
+
+    /// A node that is not this one, and a fetch that records what it announced
+    /// instead of opening a connection.
+    #[derive(Debug)]
+    struct RecordingNetwork {
+        node: NodeId,
+        /// The context of the last `execute_task_with_trace`, i.e. what a peer
+        /// would read out of the metadata.
+        announced: Mutex<Option<TraceContext>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DistNetwork for RecordingNetwork {
+        fn local_node(&self) -> NodeId {
+            self.node.clone()
+        }
+
+        async fn send_tasks(&self, _node_id: NodeId, _tasks: ScheduledTasks) -> DistResult<()> {
+            Err(DistError::internal("test"))
+        }
+
+        async fn execute_task(
+            &self,
+            _node_id: NodeId,
+            _task_id: TaskId,
+        ) -> DistResult<SendableRecordBatchStream> {
+            Err(DistError::internal("test uses the traced entry point"))
+        }
+
+        async fn execute_task_with_trace(
+            &self,
+            _node_id: NodeId,
+            _task_id: TaskId,
+            trace: TraceContext,
+        ) -> DistResult<SendableRecordBatchStream> {
+            *self.announced.lock() = Some(trace);
+            Err(DistError::internal("test does not open a connection"))
+        }
+
+        async fn get_jobs(
+            &self,
+            _node_id: NodeId,
+            _job_ids: Option<Vec<crate::JobId>>,
+        ) -> DistResult<HashMap<StageId, StageInfo>> {
+            Err(DistError::internal("test"))
+        }
+
+        async fn cleanup_jobs(
+            &self,
+            _node_id: NodeId,
+            _job_ids: Vec<crate::JobId>,
+        ) -> DistResult<()> {
+            Err(DistError::internal("test"))
+        }
+    }
+
+    /// A plan that does what `ProxyExec` does for a partition of another node:
+    /// asks the runtime for the remote task's stream, from inside the driver
+    /// task of the stage that consumes it.
+    #[derive(Debug)]
+    struct FetchExec {
+        schema: SchemaRef,
+        properties: Arc<PlanProperties>,
+        runtime: DistRuntime,
+        remote: NodeId,
+        remote_task: TaskId,
+    }
+
+    impl DisplayAs for FetchExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "FetchExec")
+        }
+    }
+
+    impl ExecutionPlan for FetchExec {
+        fn name(&self) -> &str {
+            "FetchExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.properties
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(
+                &Arc<dyn PhysicalExpr>,
+            ) -> Result<TreeNodeRecursion, DataFusionError>,
+        ) -> Result<TreeNodeRecursion, DataFusionError> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream, DataFusionError> {
+            let runtime = self.runtime.clone();
+            let remote = self.remote.clone();
+            let remote_task = self.remote_task.clone();
+            let schema = self.schema.clone();
+            let stream = futures::stream::once(async move {
+                runtime
+                    .execute_remote(remote, remote_task)
+                    .await
+                    .map(|_| RecordBatch::new_empty(schema))
+                    .map_err(DataFusionError::from)
+            });
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema.clone(),
+                stream,
+            )))
         }
     }
 
@@ -1142,6 +1325,288 @@ mod tests {
         );
         assert_ne!(task.field("span_id"), Some(""));
         assert_ne!(task.field("parent_span_id"), Some(""));
+    }
+
+    // ── the contract with a log sink ──────────────────────────────────────────
+
+    /// The name and the three id fields are what a sink joins a line by, and a
+    /// span built without one of them compiles fine and only loses a column. So
+    /// every hop constructor is built here, traced and untraced, and read back
+    /// out of a subscriber.
+    #[test]
+    fn every_hop_names_itself_and_carries_the_ids() {
+        let recorder = Arc::new(Recorder::default());
+        let _guard = tracing::subscriber::set_default(Recording(recorder.clone()));
+
+        let node = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50050,
+        };
+        let task_id = TaskId {
+            job_id: "contract".into(),
+            stage: 1,
+            partition: 2,
+        };
+        let traced = TraceContext::from_traceparent(SAMPLE).expect("valid");
+
+        let mut hops = Vec::new();
+        for parent in [traced, TraceContext::none()] {
+            hops.push((
+                super::span_name::JOB_SUBMIT,
+                super::submit_hop(parent, "job"),
+            ));
+            hops.push((
+                super::span_name::JOB_SEND_TASKS,
+                super::send_tasks_hop(parent, &node, 3),
+            ));
+            hops.push((
+                super::span_name::JOB_RECEIVE_TASKS,
+                super::receive_tasks_hop(parent, "job", &node, 3),
+            ));
+            hops.push((
+                super::span_name::TASK_EXECUTE,
+                super::task_hop(parent, &task_id, &node),
+            ));
+            hops.push((
+                super::span_name::TASK_FETCH,
+                super::fetch_hop(parent, &task_id, &node, None),
+            ));
+            hops.push((
+                super::span_name::JOB_COMPLETED,
+                super::job_completed_hop(parent, "job"),
+            ));
+            hops.push((
+                super::span_name::JOB_CLEANUP,
+                super::job_cleanup_hop(parent, "job"),
+            ));
+            hops.push((
+                super::span_name::JOB_CHECK_COMPLETED,
+                super::job_check_hop(parent, "job"),
+            ));
+        }
+
+        for (name, hop) in &hops {
+            let id = hop.span.id().expect("the recorder saw the span").into_u64();
+            let record = {
+                let spans = recorder.spans.lock();
+                spans
+                    .iter()
+                    .find(|span| span.id == id)
+                    .cloned()
+                    .expect("recorded")
+            };
+            assert_eq!(&record.name, name, "a span is renamed");
+            for field in ["trace_id", "span_id", "parent_span_id"] {
+                assert!(
+                    record.field(field).is_some(),
+                    "{name} does not carry {field}"
+                );
+            }
+            // The ids in the fields are the ids in the context: a hop whose
+            // span says one thing and whose children continue another leaves a
+            // parent that no span ever wrote.
+            assert_eq!(
+                record.field("trace_id"),
+                Some(hop.ctx.trace_id_hex().as_str())
+            );
+            assert_eq!(
+                record.field("span_id"),
+                Some(super::span_id_hex(hop.span_id).as_str())
+            );
+            assert_eq!(hop.ctx.parent_span_id(), hop.span_id);
+        }
+
+        // The batch spans name a unit of the event loop rather than a hop, so
+        // they carry no ids — but a host renders them as a scope, so they stay.
+        for (name, span) in [
+            (
+                super::span_name::JOB_CLEANUP_BATCH,
+                super::cleanup_batch_span(2),
+            ),
+            (
+                super::span_name::JOB_CHECK_COMPLETED_BATCH,
+                super::check_completed_span(2),
+            ),
+            (super::span_name::STAGE0_POLL, super::stage0_poll_span(2)),
+        ] {
+            let id = span.id().expect("the recorder saw the span").into_u64();
+            let recorded = {
+                let spans = recorder.spans.lock();
+                spans.iter().find(|s| s.id == id).map(|s| s.name.clone())
+            };
+            assert_eq!(recorded.as_deref(), Some(name));
+        }
+    }
+
+    // ── the hop a task works under ────────────────────────────────────────────
+
+    /// One node, one traced job, and the plan of the local stage asks for a
+    /// partition of another node — which is what `ProxyExec` does for the stage
+    /// it consumes. The fetch must name the task that caused it, and the call it
+    /// makes must name the fetch: that is the chain a trace cannot express as a
+    /// parent.
+    #[tokio::test]
+    async fn a_fetch_names_the_task_that_caused_it() {
+        let recorder = Arc::new(Recorder::default());
+        let _guard = tracing::subscriber::set_default(Recording(recorder.clone()));
+
+        let node = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50050,
+        };
+        let remote = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50051,
+        };
+        let network = Arc::new(RecordingNetwork {
+            node: node.clone(),
+            announced: Mutex::new(None),
+        });
+        let ctx = SessionContext::new();
+        let runtime = DistRuntime::new(
+            ctx.task_ctx(),
+            Arc::new(DistConfig::default()),
+            Arc::new(SingleNodeCluster { node: node.clone() }),
+            network.clone(),
+        )
+        .with_executor(Arc::new(CurrentRuntime {
+            handle: Handle::current(),
+        }));
+
+        let remote_task = TaskId {
+            job_id: "test-job".into(),
+            stage: 1,
+            partition: 0,
+        };
+        let schema: SchemaRef = Arc::new(Schema::new(vec![ArrowField::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(FetchExec {
+            schema: schema.clone(),
+            properties: EmptyExec::new(schema).properties().clone(),
+            runtime: runtime.clone(),
+            remote: remote.clone(),
+            remote_task,
+        });
+
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        let stage0 = runtime
+            .submit("test-job", plan, Arc::new(HashMap::new()))
+            .with_trace_context(caller)
+            .await
+            .expect("submit");
+        let (task_id, _) = stage0.iter().next().expect("one stage0 task");
+
+        // Draining the stream runs the plan, which fetches.
+        let mut stream = runtime
+            .execute_local(task_id.clone())
+            .await
+            .expect("execute local");
+        while let Some(_batch) = stream.next().await {}
+        drop(stream);
+
+        let spans = recorder.spans.lock().clone();
+        let by_name = |name: &str| {
+            spans
+                .iter()
+                .find(|span| span.name == name)
+                .unwrap_or_else(|| panic!("no {name} span"))
+                .clone()
+        };
+        let local_task = by_name(super::span_name::TASK_EXECUTE);
+        let fetch = by_name(super::span_name::TASK_FETCH);
+
+        assert_eq!(local_task.field("job_id"), Some("test-job"));
+        assert_eq!(fetch.field("job_id"), Some("test-job"));
+        // The fetch is a child of the task that caused it, not of the job root.
+        assert_eq!(
+            fetch.field("parent_span_id"),
+            local_task.field("span_id"),
+            "the fetch must continue the task that asked for it"
+        );
+        // And it says so in a field of its own, which a tracer backend would
+        // otherwise be the only one to see.
+        assert_eq!(fetch.field("link_span_id"), local_task.field("span_id"));
+
+        // The call the fetch makes announces the fetch itself, so the execution
+        // on the other node is its child.
+        let announced = network.announced.lock().expect("the fetch called out");
+        assert_eq!(announced.trace_id(), caller.trace_id());
+        assert_eq!(
+            announced.parent_span_id_hex(),
+            fetch.field("span_id").expect("the fetch logged its id")
+        );
+    }
+
+    /// The same fetch with nobody having installed a scope — a host calling the
+    /// runtime directly — still reports the job's trace, taken from the stages.
+    #[tokio::test]
+    async fn a_fetch_without_a_scope_falls_back_to_the_jobs_trace() {
+        let recorder = Arc::new(Recorder::default());
+        let _guard = tracing::subscriber::set_default(Recording(recorder.clone()));
+
+        let node = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50050,
+        };
+        let remote = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50051,
+        };
+        let network = Arc::new(RecordingNetwork {
+            node: node.clone(),
+            announced: Mutex::new(None),
+        });
+        let ctx = SessionContext::new();
+        let runtime = DistRuntime::new(
+            ctx.task_ctx(),
+            Arc::new(DistConfig::default()),
+            Arc::new(SingleNodeCluster { node }),
+            network.clone(),
+        )
+        .with_executor(Arc::new(CurrentRuntime {
+            handle: Handle::current(),
+        }));
+
+        let schema: SchemaRef = Arc::new(Schema::new(vec![ArrowField::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProbeExec {
+            schema: schema.clone(),
+            properties: EmptyExec::new(schema).properties().clone(),
+        });
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        runtime
+            .submit("test-job", plan, Arc::new(HashMap::new()))
+            .with_trace_context(caller)
+            .await
+            .expect("submit");
+
+        let remote_task = TaskId {
+            job_id: "test-job".into(),
+            stage: 1,
+            partition: 0,
+        };
+        // Not awaited for its stream: the call to the peer fails in this test,
+        // and what is being read is what it was told before it failed.
+        let _ = runtime.execute_remote(remote, remote_task).await;
+
+        let spans = recorder.spans.lock().clone();
+        let fetch = spans
+            .iter()
+            .find(|span| span.name == super::span_name::TASK_FETCH)
+            .expect("the fetch opened a span");
+        assert_eq!(
+            fetch.field("trace_id"),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+            "a fetch with no scope still belongs to its job"
+        );
+        // No task of ours caused it, so there is no link to name.
+        assert_eq!(fetch.field("link_span_id"), Some(""));
     }
 
     /// `submit` used to be an `async fn`, so callers spawned and joined it. The

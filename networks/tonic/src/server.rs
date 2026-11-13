@@ -134,10 +134,10 @@ impl DistTonicService for DistTonicServer {
         // how the fetch of a task on one node is joined to its execution on
         // another. A caller that sends nothing — or a header nothing can be read
         // out of — leaves the task continuing the trace its job arrived with.
-        let parent = request
-            .metadata()
-            .get(datafusion_dist::trace::TRACEPARENT_HEADER)
-            .map(|_| parse_traceparent(request.metadata()));
+        // One read of the metadata, and an unreadable header reads as no header:
+        // an empty context is what the runtime already treats as "continue the
+        // trace the job arrived with".
+        let parent = Some(parse_traceparent(request.metadata())).filter(|trace| !trace.is_none());
         let task_id = parse_task_id(request.into_inner());
         let record_batch_stream = self
             .runtime
@@ -375,7 +375,12 @@ mod tests {
             .expect("the header arrived");
         let received = TraceContext::from_traceparent(&seen).expect("parse");
         assert_eq!(received.trace_id_hex(), job_trace.trace_id_hex());
-        assert_eq!(received.parent_span_id_hex(), hop.parent_span_id_hex());
+        // The id the peer reads is the span id of the fetch: that is what makes
+        // the execution there the child of the fetch here.
+        let fetch_span_id = hop.parent_span_id().expect("a traced hop names its span");
+        assert_eq!(received.parent_span_id(), Some(fetch_span_id));
+        // Not the span the job arrived with, which is the fetch's own parent.
+        assert_ne!(received.parent_span_id(), job_trace.parent_span_id());
     }
 
     /// A header that does not parse is "no trace", not a failed call: the same

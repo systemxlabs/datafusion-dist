@@ -38,20 +38,13 @@ const CHECK_JOB_RETRY_MAX_TIMES: usize = 3;
 /// The event loop batches the events of many jobs, so the trace cannot come from
 /// the span the loop runs in: it comes from the stage state, which is where the
 /// context that arrived with the tasks is kept.
-fn job_trace(
-    stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    index: Option<&Arc<Mutex<HashMap<JobId, TraceContext>>>>,
-    job_id: &JobId,
-) -> TraceContext {
-    let trace = match index {
-        Some(index) => crate::runtime::job_trace(stages, index, job_id),
-        None => stages
-            .lock()
-            .values()
-            .find(|stage| stage.stage_id.job_id == *job_id)
-            .map(|stage| stage.trace),
-    };
-    trace.unwrap_or_default()
+fn job_trace(stages: &Arc<Mutex<HashMap<StageId, StageState>>>, job_id: &JobId) -> TraceContext {
+    stages
+        .lock()
+        .values()
+        .find(|stage| stage.stage_id.job_id == *job_id)
+        .map(|stage| stage.trace)
+        .unwrap_or_default()
 }
 
 fn job_check_retry_strategy() -> ExponentialBuilder {
@@ -124,10 +117,6 @@ pub struct EventHandler {
     pub cluster: Arc<dyn DistCluster>,
     pub network: Arc<dyn DistNetwork>,
     pub local_stages: Arc<Mutex<HashMap<StageId, StageState>>>,
-    /// The same index of a job's trace that the runtime keeps, so that the lines
-    /// this loop writes are joined to a job without scanning its stages.
-    /// `pub(crate)`: it is the runtime's shortcut, not a field of the handler.
-    pub(crate) job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
     pub sender: Sender<Event>,
     pub receiver: Receiver<Event>,
 }
@@ -166,7 +155,6 @@ impl EventHandler {
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
-            let job_traces = self.job_traces.clone();
             let sender = self.sender.clone();
             // Each spawn starts from no context of its own, so the operation
             // names itself: the batch loop has mixed the jobs of many callers
@@ -178,7 +166,6 @@ impl EventHandler {
                         &cluster,
                         &network,
                         &local_stages,
-                        &job_traces,
                         &sender,
                         check_job_ids.clone(),
                     )
@@ -192,18 +179,12 @@ impl EventHandler {
             let cluster = self.cluster.clone();
             let network = self.network.clone();
             let local_stages = self.local_stages.clone();
-            let job_traces = self.job_traces.clone();
             let span = trace::cleanup_batch_span(cleanup_job_ids.len());
             tokio::spawn(
                 async move {
-                    if let Err(e) = cleanup_jobs_indexed(
-                        &cluster,
-                        &network,
-                        &local_stages,
-                        Some(&job_traces),
-                        cleanup_job_ids.clone(),
-                    )
-                    .await
+                    if let Err(e) =
+                        cleanup_jobs(&cluster, &network, &local_stages, cleanup_job_ids.clone())
+                            .await
                     {
                         error!("Failed to cleanup jobs {cleanup_job_ids:?}: {e}");
                     }
@@ -214,7 +195,6 @@ impl EventHandler {
 
         if !all_stage0_ids.is_empty() {
             let local_stages = self.local_stages.clone();
-            let job_traces = self.job_traces.clone();
             let stage0_task_poll_timeout = self.config.stage0_task_poll_timeout;
             let sender = self.sender.clone();
             let span = trace::stage0_poll_span(all_stage0_ids.len());
@@ -222,7 +202,6 @@ impl EventHandler {
                 async move {
                     wait_stage0_tasks_polling(
                         &local_stages,
-                        &job_traces,
                         stage0_task_poll_timeout,
                         &sender,
                         all_stage0_ids,
@@ -239,22 +218,12 @@ async fn handle_check_jobs_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_traces: &Arc<Mutex<HashMap<JobId, TraceContext>>>,
     sender: &Sender<Event>,
     job_ids: Vec<JobId>,
 ) {
-    match (|| async {
-        check_jobs_completed_indexed(
-            cluster,
-            network,
-            local_stages,
-            Some(job_traces),
-            job_ids.clone(),
-        )
+    match (|| async { check_jobs_completed(cluster, network, local_stages, job_ids.clone()).await })
+        .retry(job_check_retry_strategy())
         .await
-    })
-    .retry(job_check_retry_strategy())
-    .await
     {
         Ok(completed_map) => {
             for (job_id, completed) in completed_map {
@@ -262,9 +231,7 @@ async fn handle_check_jobs_completed(
                     // The batch holds many jobs, so the line that says one of
                     // them ended is opened in a span of its own: the trace of a
                     // job is not the trace of the batch it was checked in.
-                    let trace = job_trace(local_stages, Some(job_traces), &job_id);
-                    let (_, span_id) = trace.child();
-                    let span = trace::job_completed_span(&trace, span_id, &job_id);
+                    let hop = trace::job_completed_hop(job_trace(local_stages, &job_id), &job_id);
                     async move {
                         debug!("Job {job_id} completed, remove it from cluster");
                         if let Err(e) =
@@ -273,7 +240,7 @@ async fn handle_check_jobs_completed(
                             error!("Failed to send cleanup job event for job {job_id}: {e}");
                         }
                     }
-                    .instrument(span)
+                    .instrument(hop.span)
                     .await;
                 }
             }
@@ -288,16 +255,6 @@ pub async fn check_jobs_completed(
     cluster: &Arc<dyn DistCluster>,
     network: &Arc<dyn DistNetwork>,
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_ids: Vec<JobId>,
-) -> DistResult<HashMap<JobId, bool>> {
-    check_jobs_completed_indexed(cluster, network, local_stages, None, job_ids).await
-}
-
-async fn check_jobs_completed_indexed(
-    cluster: &Arc<dyn DistCluster>,
-    network: &Arc<dyn DistNetwork>,
-    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_traces: Option<&Arc<Mutex<HashMap<JobId, TraceContext>>>>,
     job_ids: Vec<JobId>,
 ) -> DistResult<HashMap<JobId, bool>> {
     if job_ids.is_empty() {
@@ -349,10 +306,8 @@ async fn check_jobs_completed_indexed(
             }
             Some(nodes) => {
                 let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
-                let trace = job_trace(local_stages, job_traces, &job_id);
-                let (_, span_id) = trace.child();
-                let span = trace::job_check_span(&trace, span_id, &job_id);
-                span.in_scope(|| {
+                let hop = trace::job_check_hop(job_trace(local_stages, &job_id), &job_id);
+                hop.span.in_scope(|| {
                     warn!(
                         "Job {job_id} is polluted: task nodes {missing:?} are not alive, treat as completed"
                     )
@@ -360,10 +315,8 @@ async fn check_jobs_completed_indexed(
                 completed_map.insert(job_id, true);
             }
             None => {
-                let trace = job_trace(local_stages, job_traces, &job_id);
-                let (_, span_id) = trace.child();
-                let span = trace::job_check_span(&trace, span_id, &job_id);
-                span.in_scope(|| {
+                let hop = trace::job_check_hop(job_trace(local_stages, &job_id), &job_id);
+                hop.span.in_scope(|| {
                     warn!(
                         "No job_task_distribution found for job {job_id}, skipping remote status check"
                     )
@@ -449,16 +402,6 @@ pub async fn cleanup_jobs(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
     job_ids: Vec<JobId>,
 ) -> DistResult<()> {
-    cleanup_jobs_indexed(cluster, network, local_stages, None, job_ids).await
-}
-
-async fn cleanup_jobs_indexed(
-    cluster: &Arc<dyn DistCluster>,
-    network: &Arc<dyn DistNetwork>,
-    local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_traces: Option<&Arc<Mutex<HashMap<JobId, TraceContext>>>>,
-    job_ids: Vec<JobId>,
-) -> DistResult<()> {
     let alive_nodes: HashSet<NodeId> = cluster.alive_nodes().await?.keys().cloned().collect();
 
     let target_nodes_by_job = {
@@ -488,10 +431,8 @@ async fn cleanup_jobs_indexed(
             Some(nodes) if nodes.is_subset(&alive_nodes) => nodes,
             Some(nodes) => {
                 let missing: Vec<_> = nodes.difference(&alive_nodes).collect();
-                let trace = job_trace(local_stages, job_traces, &job_id);
-                let (_, span_id) = trace.child();
-                let span = trace::job_cleanup_span(&trace, span_id, &job_id);
-                span.in_scope(|| {
+                let hop = trace::job_cleanup_hop(job_trace(local_stages, &job_id), &job_id);
+                hop.span.in_scope(|| {
                     warn!("Job {job_id} is polluted: task nodes {missing:?} are not alive")
                 });
                 nodes
@@ -515,13 +456,6 @@ async fn cleanup_jobs_indexed(
         cleanup_stages(&mut local_stages.lock(), |stage_id| {
             local_job_ids.contains(&stage_id.job_id)
         });
-        // The index of a job's trace follows its stages out, here as everywhere.
-        if let Some(index) = job_traces {
-            let mut index = index.lock();
-            for job_id in &local_job_ids {
-                index.remove(job_id);
-            }
-        }
     }
 
     let mut futures = Vec::new();
@@ -541,7 +475,6 @@ async fn cleanup_jobs_indexed(
 
 async fn wait_stage0_tasks_polling(
     local_stages: &Arc<Mutex<HashMap<StageId, StageState>>>,
-    job_traces: &Arc<Mutex<HashMap<JobId, TraceContext>>>,
     stage0_task_poll_timeout: Duration,
     sender: &Sender<Event>,
     stage0_ids: Vec<StageId>,
@@ -563,16 +496,14 @@ async fn wait_stage0_tasks_polling(
     }
 
     for job_id in timeout_job_ids {
-        let trace = job_trace(local_stages, Some(job_traces), &job_id);
-        let (_, span_id) = trace.child();
-        let span = trace::job_cleanup_span(&trace, span_id, &job_id);
+        let hop = trace::job_cleanup_hop(job_trace(local_stages, &job_id), &job_id);
         async move {
             if let Err(e) = send_event_with_timeout(sender, Event::CleanupJob(job_id.clone())).await
             {
                 error!("Failed to send CleanupJob event for job {job_id}: {e}");
             }
         }
-        .instrument(span)
+        .instrument(hop.span)
         .await;
     }
 }
