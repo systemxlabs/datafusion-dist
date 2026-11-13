@@ -24,7 +24,6 @@ use datafusion_proto::{
     physical_plan::{AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec},
     protobuf::PhysicalPlanNode,
 };
-use fastrace::prelude::*;
 use fastrace_tonic::{FastraceClientLayer, FastraceClientService};
 use futures::{StreamExt, TryStreamExt, lock::Mutex};
 use tonic::transport::{Channel, Endpoint};
@@ -186,12 +185,6 @@ impl DistNetwork for DistTonicNetwork {
 
     #[fastrace::trace(name = "dist.network.send_tasks")]
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        LocalSpan::add_property(|| ("node", node_id.to_string()));
-        LocalSpan::add_property(|| ("tasks", scheduled_tasks.task_ids.len().to_string()));
-        if let Ok(job_id) = scheduled_tasks.job_id() {
-            LocalSpan::add_property(|| ("job_id", job_id.to_string()));
-        }
-
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
 
         (|| async {
@@ -212,11 +205,6 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream> {
-        LocalSpan::add_property(|| ("node", node_id.to_string()));
-        LocalSpan::add_property(|| ("job_id", task_id.job_id.to_string()));
-        LocalSpan::add_property(|| ("stage", task_id.stage.to_string()));
-        LocalSpan::add_property(|| ("partition", task_id.partition.to_string()));
-
         let mut tonic_client = self.build_tonic_client(&node_id).await?;
         let response = tonic_client
             .execute_task(serialize_task_id(task_id))
@@ -253,8 +241,6 @@ impl DistNetwork for DistTonicNetwork {
         node_id: NodeId,
         job_ids: Option<Vec<JobId>>,
     ) -> DistResult<HashMap<StageId, StageInfo>> {
-        LocalSpan::add_property(|| ("node", node_id.to_string()));
-
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
             let job_ids = job_ids.clone().map(|job_ids| protobuf::JobIds {
@@ -288,9 +274,6 @@ impl DistNetwork for DistTonicNetwork {
 
     #[fastrace::trace(name = "dist.network.cleanup_jobs")]
     async fn cleanup_jobs(&self, node_id: NodeId, job_ids: Vec<JobId>) -> DistResult<()> {
-        LocalSpan::add_property(|| ("node", node_id.to_string()));
-        LocalSpan::add_property(|| ("jobs", job_ids.len().to_string()));
-
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
             let req = protobuf::CleanupJobsReq {

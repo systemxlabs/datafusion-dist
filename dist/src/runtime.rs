@@ -138,7 +138,6 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
         let job_id = job_id.into();
-        LocalSpan::add_property(|| ("job_id", job_id.to_string()));
         debug!(
             "Submitting job {job_id} with meta {job_meta:?} and physical plan: \n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
@@ -240,10 +239,18 @@ impl DistRuntime {
                         .join(", ")
                 );
                 let network = self.network.clone();
-                let handle = tokio::spawn(async move {
-                    network.send_tasks(node_id.clone(), scheduled_tasks).await?;
-                    Ok::<_, DistError>(())
-                });
+                // A spawned task does not inherit the caller's local parent, and
+                // the network client reads that parent to put `traceparent` on
+                // the wire. Carry the span across the spawn so the tasks this
+                // delivery creates on the remote node continue the job's trace.
+                let send_span = Span::enter_with_local_parent("dist.send_tasks");
+                let handle = tokio::spawn(
+                    async move {
+                        network.send_tasks(node_id.clone(), scheduled_tasks).await?;
+                        Ok::<_, DistError>(())
+                    }
+                    .in_span(send_span),
+                );
                 handles.push(handle);
             }
         }
@@ -259,10 +266,6 @@ impl DistRuntime {
 
     #[fastrace::trace(name = "dist.runtime.execute_local")]
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
-        LocalSpan::add_property(|| ("job_id", task_id.job_id.to_string()));
-        LocalSpan::add_property(|| ("stage", task_id.stage.to_string()));
-        LocalSpan::add_property(|| ("partition", task_id.partition.to_string()));
-
         let stage_id = task_id.stage_id();
 
         let mut guard = self.stages.lock();
@@ -325,11 +328,6 @@ impl DistRuntime {
         node_id: NodeId,
         task_id: TaskId,
     ) -> DistResult<SendableRecordBatchStream> {
-        LocalSpan::add_property(|| ("node", node_id.to_string()));
-        LocalSpan::add_property(|| ("job_id", task_id.job_id.to_string()));
-        LocalSpan::add_property(|| ("stage", task_id.stage.to_string()));
-        LocalSpan::add_property(|| ("partition", task_id.partition.to_string()));
-
         if node_id == self.node_id {
             return Err(DistError::internal(format!(
                 "remote node id {node_id} is actually self"
@@ -342,10 +340,6 @@ impl DistRuntime {
 
     #[fastrace::trace(name = "dist.runtime.receive_tasks")]
     pub async fn receive_tasks(&self, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
-        if let Ok(job_id) = scheduled_tasks.job_id() {
-            LocalSpan::add_property(|| ("job_id", job_id.to_string()));
-        }
-
         if matches!(*self.status.lock(), NodeStatus::Terminating) {
             return Err(DistError::internal(
                 "Local node is in Terminating status, cannot receive tasks",

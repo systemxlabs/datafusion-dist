@@ -12,7 +12,6 @@ use datafusion_physical_plan::{
     joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
     repartition::RepartitionExec,
 };
-use fastrace::prelude::*;
 use itertools::Itertools;
 
 use crate::{
@@ -78,10 +77,6 @@ impl DistScheduler for DefaultScheduler {
         node_states: &HashMap<NodeId, NodeState>,
         stage_plans: &HashMap<StageId, Arc<dyn ExecutionPlan>>,
     ) -> DistResult<HashMap<TaskId, NodeId>> {
-        LocalSpan::add_property(|| ("local_node", local_node.to_string()));
-        LocalSpan::add_property(|| ("nodes", node_states.len().to_string()));
-        LocalSpan::add_property(|| ("stages", stage_plans.len().to_string()));
-
         if let Some(state) = node_states.get(local_node)
             && matches!(state.status, NodeStatus::Terminating)
         {

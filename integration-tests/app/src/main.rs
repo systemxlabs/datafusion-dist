@@ -28,6 +28,7 @@ use datafusion_dist_network_tonic::{
     server::DistTonicServer,
 };
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
+use fastrace::prelude::*;
 use fastrace_tonic::FastraceServerLayer;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
@@ -121,8 +122,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ctx: ctx.clone(),
         runtime: runtime.clone(),
     };
+    // The FlightSQL handlers open their own roots: `do_get` continues the trace
+    // embedded in the ticket, which a fixed header extractor cannot see.
     let test_flight_server = Server::builder()
-        .layer(FastraceServerLayer::default())
         .add_service(FlightServiceServer::new(test_flight_sql_service))
         .serve("[::]:50051".parse()?);
 
@@ -242,96 +244,145 @@ impl FlightSqlService for TestFlightSqlService {
             .map_err(|e| Status::internal(format!("{e:?}")))?
             .ok_or_else(|| Status::internal("Expected NodeTask but got None!"))?;
 
-        let node_id = NodeId {
-            host: node_task.host,
-            port: node_task.port as u16,
-        };
-        let task_id = TaskId {
-            job_id: node_task.job_id.into(),
-            stage: node_task.stage,
-            partition: node_task.partition,
-        };
-        info!("Fetching data for task {task_id} and node {node_id}");
+        // Continue the trace of the statement that submitted this job. The
+        // ticket is opaque to the client, so this is the only place the context
+        // of the job can come from without client-side propagation. A ticket
+        // without a readable context still gets a job-scoped root.
+        let root = node_task
+            .traceparent
+            .as_deref()
+            .and_then(SpanContext::decode_w3c_traceparent)
+            .map(|parent| Span::root("flight_sql.do_get", parent))
+            .unwrap_or_else(|| Span::root("flight_sql.do_get", SpanContext::random()));
 
-        let stream = if self.runtime.node_id == node_id {
-            self.runtime
-                .execute_local(task_id)
-                .await
-                .map_err(|e| Status::from_error(Box::new(e)))?
-        } else {
-            self.runtime
-                .execute_remote(node_id, task_id)
-                .await
-                .map_err(|e| Status::from_error(Box::new(e)))?
-        };
+        async move {
+            LocalSpan::add_property(|| ("job_id", node_task.job_id.clone()));
 
-        let schema = stream.schema();
+            let node_id = NodeId {
+                host: node_task.host,
+                port: node_task.port as u16,
+            };
+            let task_id = TaskId {
+                job_id: node_task.job_id.into(),
+                stage: node_task.stage,
+                partition: node_task.partition,
+            };
+            info!("Fetching data for task {task_id} and node {node_id}");
 
-        let stream = stream
-            .map_err(|e| FlightError::ExternalError(Box::new(e)))
-            .boxed();
+            let stream = if self.runtime.node_id == node_id {
+                self.runtime
+                    .execute_local(task_id)
+                    .await
+                    .map_err(|e| Status::from_error(Box::new(e)))?
+            } else {
+                self.runtime
+                    .execute_remote(node_id, task_id)
+                    .await
+                    .map_err(|e| Status::from_error(Box::new(e)))?
+            };
 
-        let write_options = IpcWriteOptions::default();
-        let flight_data_stream = FlightDataEncoderBuilder::new()
-            .with_options(write_options)
-            .with_schema(schema)
-            .build(stream)
-            .map_err(|err| Status::from_error(Box::new(err)));
-        Ok(Response::new(
-            Box::pin(flight_data_stream) as <Self as FlightService>::DoGetStream
-        ))
+            let schema = stream.schema();
+
+            let stream = stream
+                .map_err(|e| FlightError::ExternalError(Box::new(e)))
+                .boxed();
+
+            let write_options = IpcWriteOptions::default();
+            let flight_data_stream = FlightDataEncoderBuilder::new()
+                .with_options(write_options)
+                .with_schema(schema)
+                .build(stream)
+                .map_err(|err| Status::from_error(Box::new(err)));
+            Ok(Response::new(
+                Box::pin(flight_data_stream) as <Self as FlightService>::DoGetStream
+            ))
+        }
+        .in_span(root)
+        .await
     }
 
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
-        _request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        info!("get_flight_info_statement query: {}", query.query);
-        let df = self
-            .ctx
-            .sql(&query.query)
-            .await
-            .map_err(|e| Status::from_error(Box::new(e)))?;
-        let plan = df
-            .create_physical_plan()
-            .await
-            .map_err(|e| Status::from_error(Box::new(e)))?;
-        info!(
-            "Create Physical Plan: {}",
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
-        let schema = plan.schema();
+        // A statement starts a job, and therefore a trace. The context of this
+        // root is embedded in every ticket so that the later `do_get` calls
+        // continue the same trace. An external caller that sends a
+        // `traceparent` extends its own trace instead of starting a new one.
+        let parent = request
+            .metadata()
+            .get(fastrace_tonic::TRACEPARENT_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(SpanContext::decode_w3c_traceparent);
+        let root = parent
+            .map(|parent| Span::root("flight_sql.get_flight_info_statement", parent))
+            .unwrap_or_else(|| {
+                Span::root(
+                    "flight_sql.get_flight_info_statement",
+                    SpanContext::random(),
+                )
+            });
 
-        let mut job_meta = HashMap::new();
-        job_meta.insert("query".to_string(), query.query.clone());
-        let job_id = Uuid::new_v4().to_string();
-        let stage0_task_distribution = self
-            .runtime
-            .submit(job_id.as_str(), plan, Arc::new(job_meta))
-            .await
-            .map_err(|e| Status::from_error(Box::new(e)))?;
-        info!("Stage0 task distribution: {:?}", stage0_task_distribution);
+        async move {
+            info!("get_flight_info_statement query: {}", query.query);
+            let df = self
+                .ctx
+                .sql(&query.query)
+                .await
+                .map_err(|e| Status::from_error(Box::new(e)))?;
+            let plan = df
+                .create_physical_plan()
+                .await
+                .map_err(|e| Status::from_error(Box::new(e)))?;
+            info!(
+                "Create Physical Plan: {}",
+                DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+            );
+            let schema = plan.schema();
 
-        let endpoints = build_flight_endpoints(stage0_task_distribution);
+            let mut job_meta = HashMap::new();
+            job_meta.insert("query".to_string(), query.query.clone());
+            let job_id = Uuid::new_v4().to_string();
+            LocalSpan::add_property(|| ("job_id", job_id.clone()));
+            let traceparent =
+                SpanContext::current_local_parent().map(|ctx| ctx.encode_w3c_traceparent());
 
-        let mut info = FlightInfo::new()
-            .try_with_schema(&schema)
-            .map_err(|e| Status::from_error(Box::new(e)))?;
-        for endpoint in endpoints {
-            info = info.with_endpoint(endpoint);
+            let stage0_task_distribution = self
+                .runtime
+                .submit(job_id.as_str(), plan, Arc::new(job_meta))
+                .await
+                .map_err(|e| Status::from_error(Box::new(e)))?;
+            info!("Stage0 task distribution: {:?}", stage0_task_distribution);
+
+            let endpoints =
+                build_flight_endpoints(stage0_task_distribution, traceparent.as_deref());
+
+            let mut info = FlightInfo::new()
+                .try_with_schema(&schema)
+                .map_err(|e| Status::from_error(Box::new(e)))?;
+            for endpoint in endpoints {
+                info = info.with_endpoint(endpoint);
+            }
+
+            Ok(Response::new(info))
         }
-
-        Ok(Response::new(info))
+        .in_span(root)
+        .await
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
-fn build_flight_endpoints(task_distribution: HashMap<TaskId, NodeId>) -> Vec<FlightEndpoint> {
+fn build_flight_endpoints(
+    task_distribution: HashMap<TaskId, NodeId>,
+    traceparent: Option<&str>,
+) -> Vec<FlightEndpoint> {
     let mut endpoints = Vec::new();
     for (task_id, node_id) in task_distribution {
-        let ticket = NodeTask::new(&node_id, &task_id).to_ticket();
+        let mut node_task = NodeTask::new(&node_id, &task_id);
+        node_task.traceparent = traceparent.map(str::to_string);
+        let ticket = node_task.to_ticket();
         endpoints.push(FlightEndpoint::new().with_ticket(ticket));
     }
     endpoints
