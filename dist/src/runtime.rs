@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    future::{Future, IntoFuture},
+    future::Future,
     pin::Pin,
     sync::{
         Arc,
@@ -22,7 +22,7 @@ use datafusion_physical_plan::{
     execution_plan::reset_plan_states, stream::RecordBatchStreamAdapter,
 };
 
-use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
+use futures::{Stream, StreamExt, TryStreamExt, future::BoxFuture, future::join_all};
 use log::{debug, error, warn};
 use tokio::{sync::mpsc::Sender, task::AbortHandle};
 use tracing::{Instrument as _, Span};
@@ -59,6 +59,14 @@ pub struct DistRuntime {
     pub heartbeater: Arc<Heartbeater>,
     pub stages: Arc<Mutex<HashMap<StageId, StageState>>>,
     pub event_sender: Sender<Event>,
+    /// The trace of each job this node holds a stage of.
+    ///
+    /// Kept in step with `stages` — inserted when the tasks of a job arrive,
+    /// dropped wherever its stages are — so that the trace of a job is a lookup
+    /// rather than a scan of every stage, which is what `execute_remote` would
+    /// otherwise pay once per fetched partition. Private: it is a shortcut for
+    /// [`DistRuntime::job_trace_of`], not a second source of truth.
+    job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
 }
 
 impl DistRuntime {
@@ -81,11 +89,14 @@ impl DistRuntime {
 
         let (sender, receiver) = tokio::sync::mpsc::channel::<Event>(config.event_queue_size);
 
+        let job_traces = Arc::new(Mutex::new(HashMap::new()));
+
         let event_handler = EventHandler {
             config: config.clone(),
             cluster: cluster.clone(),
             network: network.clone(),
             local_stages: stages.clone(),
+            job_traces: job_traces.clone(),
             sender: sender.clone(),
             receiver,
         };
@@ -104,6 +115,7 @@ impl DistRuntime {
             heartbeater: Arc::new(heartbeater),
             stages,
             event_sender: sender,
+            job_traces,
         }
     }
 
@@ -121,7 +133,11 @@ impl DistRuntime {
 
     pub async fn start(&self) {
         self.heartbeater.start();
-        start_stage_cleaner(self.stages.clone(), self.config.clone());
+        start_stage_cleaner(
+            self.stages.clone(),
+            self.job_traces.clone(),
+            self.config.clone(),
+        );
     }
 
     pub async fn shutdown(&self) {
@@ -146,11 +162,14 @@ impl DistRuntime {
         job_meta: Arc<HashMap<String, String>>,
     ) -> Submit<'_> {
         Submit {
-            runtime: self,
-            job_id: job_id.into(),
-            plan,
-            job_meta,
-            trace: TraceContext::none(),
+            parts: Some(SubmitParts {
+                runtime: self,
+                job_id: job_id.into(),
+                plan,
+                job_meta,
+                trace: TraceContext::none(),
+            }),
+            inner: None,
         }
     }
 
@@ -313,7 +332,33 @@ impl DistRuntime {
     /// and the stream that is polled by whoever fetched the task. Both carry the
     /// span themselves, because neither inherits the span of its creator.
     pub async fn execute_local(&self, task_id: TaskId) -> DistResult<SendableRecordBatchStream> {
-        let trace = self.stage_trace(&task_id.stage_id());
+        self.execute_local_with_parent(task_id, None).await
+    }
+
+    /// Execute one task under a trace the caller supplies, rather than the one
+    /// this node stored with the job.
+    ///
+    /// A node that learned the caller's context off the wire — the `ExecuteTask`
+    /// call carries one when the caller has a span to name — passes it here: the
+    /// task still belongs to its job, but the fetch that asked for it is its
+    /// immediate parent. `parent` is used as given, so the task span derives its
+    /// id from it exactly as it would from the stored context; `None` falls back
+    /// to the stage's own trace, which is what [`DistRuntime::execute_local`]
+    /// does.
+    ///
+    /// The tonic transport does not send a context on `ExecuteTask` yet, because
+    /// `DistNetwork::execute_task` has no parameter to carry one; this entry
+    /// point is what that change would use, and it is what a host embedding the
+    /// runtime directly can use today.
+    pub async fn execute_local_with_parent(
+        &self,
+        task_id: TaskId,
+        parent: Option<TraceContext>,
+    ) -> DistResult<SendableRecordBatchStream> {
+        let trace = match parent {
+            Some(parent) => parent,
+            None => self.stage_trace(&task_id.stage_id()),
+        };
         let (_, span_id) = trace.child();
         let span = trace::task_span(&trace, span_id, &task_id, &self.node_id);
         // The task belongs to the job, and it is also the continuation of the
@@ -324,21 +369,31 @@ impl DistRuntime {
         Ok(Box::pin(task_stream))
     }
 
+    /// The trace of the stage a task belongs to, as this node holds it.
+    ///
+    /// `None` when this node holds no stage of the job: a task id alone does not
+    /// tell us that the task belongs here, and inventing a trace for it would
+    /// put a span in a trace nobody asked for.
+    pub fn trace_of(&self, task_id: &TaskId) -> Option<TraceContext> {
+        self.stages
+            .lock()
+            .get(&task_id.stage_id())
+            .map(|stage| stage.trace)
+    }
+
+    /// The trace of a job this node holds any stage of.
+    ///
+    /// `None` when the job is unknown here, which is also what a job looks like
+    /// after its stages were cleaned up.
+    pub fn job_trace_of(&self, job_id: &JobId) -> Option<TraceContext> {
+        job_trace(&self.stages, &self.job_traces, job_id)
+    }
+
     /// The trace of a stage this node holds, or none if it holds no such stage.
     fn stage_trace(&self, stage_id: &StageId) -> TraceContext {
         self.stages
             .lock()
             .get(stage_id)
-            .map(|stage| stage.trace)
-            .unwrap_or_default()
-    }
-
-    /// The trace of a job this node holds any stage of.
-    fn job_trace(&self, job_id: &JobId) -> TraceContext {
-        self.stages
-            .lock()
-            .values()
-            .find(|stage| stage.stage_id.job_id == *job_id)
             .map(|stage| stage.trace)
             .unwrap_or_default()
     }
@@ -412,9 +467,9 @@ impl DistRuntime {
             )));
         }
 
-        let trace = self.job_trace(&task_id.job_id);
+        let trace = self.job_trace_of(&task_id.job_id).unwrap_or_default();
         let (_, span_id) = trace.child();
-        let span = trace::task_span(&trace, span_id, &task_id, &node_id);
+        let span = trace::task_fetch_span(&trace, span_id, &task_id, &node_id);
         span.follows_from(tracing::Span::current());
         async move {
             debug!("Executing remote task {task_id} on node {node_id}");
@@ -486,6 +541,13 @@ impl DistRuntime {
             guard.extend(stage_states);
             drop(guard);
         }
+        // The index of a job's trace follows its stages in, and out.
+        for stage_id in &stage_ids {
+            self.job_traces
+                .lock()
+                .entry(stage_id.job_id.clone())
+                .or_insert(trace);
+        }
 
         let stage0_ids = stage_ids
             .iter()
@@ -520,6 +582,10 @@ impl DistRuntime {
         cleanup_stages(&mut self.stages.lock(), |stage_id| {
             job_ids.contains(&stage_id.job_id)
         });
+        let mut job_traces = self.job_traces.lock();
+        for job_id in &job_ids {
+            job_traces.remove(job_id);
+        }
     }
 
     pub fn get_local_jobs(&self, job_ids: Option<&Vec<JobId>>) -> HashMap<StageId, StageInfo> {
@@ -599,8 +665,19 @@ fn stage_task_ctx(task_ctx: Arc<TaskContext>) -> Arc<TaskContext> {
 ///
 /// Awaiting it submits the job; naming its trace first is optional, which is why
 /// this is a value rather than a parameter on every `submit` call.
+///
+/// It is a [`Future`], not only an [`IntoFuture`]: a caller that hands the value
+/// to `tokio::spawn`, `select!` or `join_all` — all of which took the old
+/// `async fn submit` — keeps working.
 #[must_use = "submitting a job does nothing until the value is awaited"]
 pub struct Submit<'a> {
+    parts: Option<SubmitParts<'a>>,
+    /// Built on the first poll: [`Future::poll`] is the only place where the
+    /// fields can be moved out, since `with_trace_context` runs before it.
+    inner: Option<BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>>>,
+}
+
+struct SubmitParts<'a> {
     runtime: &'a DistRuntime,
     job_id: JobId,
     plan: Arc<dyn ExecutionPlan>,
@@ -622,35 +699,54 @@ impl<'a> Submit<'a> {
     ///     .with_trace_context(TraceContext::from_traceparent(&header)?)
     ///     .await?;
     /// ```
+    ///
+    /// A host that already opened the span its request runs under needs no
+    /// string at all: [`TraceContext::from_parts`] or
+    /// [`TraceContext::with_parent_span_id`] name that span directly.
     pub fn with_trace_context(mut self, trace: TraceContext) -> Self {
-        self.trace = trace;
+        if let Some(parts) = self.parts.as_mut() {
+            parts.trace = trace;
+        }
         self
     }
-}
 
-impl<'a> IntoFuture for Submit<'a> {
-    type Output = DistResult<HashMap<TaskId, NodeId>>;
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
-
-    fn into_future(self) -> Self::IntoFuture {
+    /// The submitted job, as the future that polls it.
+    fn start(&mut self) -> BoxFuture<'a, DistResult<HashMap<TaskId, NodeId>>> {
+        let parts = self.parts.take().expect("a submit future is started once");
         Box::pin(async move {
+            let SubmitParts {
+                runtime,
+                job_id,
+                plan,
+                job_meta,
+                trace,
+            } = parts;
             // The span of this node's view of the job, and the context its
             // children inherit: the caller's span is the parent of both.
-            let (job_trace, span_id) = self.trace.child();
-            let span = trace::submit_span(&self.trace, span_id, &self.job_id);
-            self.runtime
-                .submit_inner(
-                    self.job_id,
-                    self.plan,
-                    self.job_meta,
-                    job_trace,
-                    span.clone(),
-                )
+            let (job_trace, span_id) = trace.child();
+            let span = trace::submit_span(&trace, span_id, &job_id);
+            runtime
+                .submit_inner(job_id, plan, job_meta, job_trace, span.clone())
                 .instrument(span)
                 .await
         })
     }
 }
+
+impl<'a> Future for Submit<'a> {
+    type Output = DistResult<HashMap<TaskId, NodeId>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
+        if this.inner.is_none() {
+            this.inner = Some(this.start());
+        }
+        this.inner.as_mut().expect("set above").as_mut().poll(cx)
+    }
+}
+
+// `Submit` needs no `IntoFuture` of its own: the standard library implements it
+// for every `Future`, so `.await` reaches the `poll` above.
 
 /// Tracks the runtime state of a single execution stage on the local node.
 #[derive(Debug)]
@@ -869,8 +965,9 @@ pub struct TaskStream {
     pub stream: SendableRecordBatchStream,
     /// Span of this task. The stream is polled, and dropped, by whoever holds
     /// it — a tonic server, or the `ProxyExec` of the stage consuming this one
-    /// — so it carries its own span instead of relying on the caller's.
-    pub span: Span,
+    /// — so it carries its own span instead of relying on the caller's. Private:
+    /// the tracer this crate happens to use is not part of the public type.
+    span: Span,
     pub output_rows: usize,
     pub output_bytes: usize,
     pub completed: bool,
@@ -903,7 +1000,10 @@ impl Stream for TaskStream {
     type Item = Result<RecordBatch, DataFusionError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let _enter = self.span.clone().entered();
+        // A host that runs at `datafusion_dist=debug` in production polls this
+        // once per batch; when no subscriber is interested the span is disabled
+        // and entering it is pure overhead.
+        let _enter = (!self.span.is_disabled()).then(|| self.span.clone().entered());
         match self.stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(batch))) => {
                 self.output_rows += batch.num_rows();
@@ -928,7 +1028,7 @@ impl RecordBatchStream for TaskStream {
 
 impl Drop for TaskStream {
     fn drop(&mut self) {
-        let _enter = self.span.clone().entered();
+        let _enter = (!self.span.is_disabled()).then(|| self.span.clone().entered());
         let task_id = self.task_id.clone();
         let task_set_id = self.task_set_id;
         let task_metrics = TaskMetrics {
@@ -982,7 +1082,11 @@ fn stages_to_clean(
     (expired, inactive)
 }
 
-fn start_stage_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config: Arc<DistConfig>) {
+fn start_stage_cleaner(
+    stages: Arc<Mutex<HashMap<StageId, StageState>>>,
+    job_traces: Arc<Mutex<HashMap<JobId, TraceContext>>>,
+    config: Arc<DistConfig>,
+) {
     tokio::spawn(async move {
         let display_ids = |ids: &[StageId]| {
             ids.iter()
@@ -1014,9 +1118,38 @@ fn start_stage_cleaner(stages: Arc<Mutex<HashMap<StageId, StageState>>>, config:
                 );
                 cleanup_stages(&mut guard, |stage_id| inactive.contains(stage_id));
             }
+
+            // The trace index follows the stages out: what is no longer here
+            // cannot be joined to anything.
+            for stage_id in expired.iter().chain(inactive.iter()) {
+                job_traces.lock().remove(&stage_id.job_id);
+            }
             drop(guard);
         }
     });
+}
+
+/// The trace of a job this node holds any stage of.
+///
+/// The index is read first, so the lookup does not scan every stage — which is
+/// what a fetch of a remote task would otherwise pay once per partition. A miss
+/// falls back to the stages, which is where the context lives, and fills the
+/// index in: the index is a shortcut, not a second source of truth.
+pub(crate) fn job_trace(
+    stages: &Mutex<HashMap<StageId, StageState>>,
+    index: &Mutex<HashMap<JobId, TraceContext>>,
+    job_id: &JobId,
+) -> Option<TraceContext> {
+    if let Some(trace) = index.lock().get(job_id) {
+        return Some(*trace);
+    }
+    let trace = stages
+        .lock()
+        .values()
+        .find(|stage| stage.stage_id.job_id == *job_id)
+        .map(|stage| stage.trace)?;
+    index.lock().insert(job_id.clone(), trace);
+    Some(trace)
 }
 
 pub(crate) fn cleanup_stages(

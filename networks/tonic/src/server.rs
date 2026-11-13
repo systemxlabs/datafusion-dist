@@ -130,14 +130,23 @@ impl DistTonicService for DistTonicServer {
         &self,
         request: Request<protobuf::TaskId>,
     ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
+        // A caller that names a span gets it as the parent of this task, which is
+        // how the fetch of a task on one node is joined to its execution on
+        // another. This client does not send one yet — `DistNetwork::execute_task`
+        // has no parameter to carry it — so the stored context of the job is what
+        // the span continues, which is the same trace either way.
+        let parent = request
+            .metadata()
+            .get(datafusion_dist::trace::TRACEPARENT_HEADER)
+            .map(|_| parse_traceparent(request.metadata()));
         let task_id = parse_task_id(request.into_inner());
-        let record_batch_stream =
-            self.runtime
-                .execute_local(task_id.clone())
-                .await
-                .map_err(|e| {
-                    Status::internal(format!("Failed to execute local task {task_id}: {e}"))
-                })?;
+        let record_batch_stream = self
+            .runtime
+            .execute_local_with_parent(task_id.clone(), parent)
+            .await
+            .map_err(|e| {
+                Status::internal(format!("Failed to execute local task {task_id}: {e}"))
+            })?;
 
         let schema = record_batch_stream.schema();
 
@@ -189,5 +198,141 @@ impl DistTonicService for DistTonicServer {
             .cleanup_local_jobs(job_ids.into_iter().map(Into::into).collect());
 
         Ok(Response::new(CleanupJobsResp {}))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion_dist::trace::{TRACEPARENT_HEADER, TraceContext};
+    use tokio::sync::Mutex;
+
+    use super::*;
+    use crate::{
+        network::with_traceparent, protobuf::dist_tonic_service_client::DistTonicServiceClient,
+        protobuf::dist_tonic_service_server::DistTonicServiceServer,
+    };
+
+    const SAMPLE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    /// Stands in for the runtime: it only reports what the metadata of the call
+    /// it received contained.
+    #[derive(Debug, Clone, Default)]
+    struct MetadataRecorder {
+        seen: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DistTonicService for MetadataRecorder {
+        type ExecuteTaskStream = BoxedDistStream<FlightData>;
+
+        async fn send_tasks(
+            &self,
+            request: Request<SendTasksReq>,
+        ) -> Result<Response<SendTasksResp>, Status> {
+            let seen = request
+                .metadata()
+                .get(TRACEPARENT_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            *self.seen.lock().await = seen;
+            Ok(Response::new(SendTasksResp {}))
+        }
+
+        async fn execute_task(
+            &self,
+            _request: Request<protobuf::TaskId>,
+        ) -> Result<Response<Self::ExecuteTaskStream>, Status> {
+            unimplemented!("this test only sends tasks")
+        }
+
+        async fn get_jobs(
+            &self,
+            _request: Request<GetJobsReq>,
+        ) -> Result<Response<GetJobsResp>, Status> {
+            unimplemented!("this test only sends tasks")
+        }
+
+        async fn cleanup_jobs(
+            &self,
+            _request: Request<CleanupJobsReq>,
+        ) -> Result<Response<CleanupJobsResp>, Status> {
+            unimplemented!("this test only sends tasks")
+        }
+    }
+
+    /// A header on the wire is what a receiver reads back: the trace survives a
+    /// real gRPC round trip, not just the formatting of the value.
+    #[tokio::test]
+    async fn the_trace_crosses_the_wire_in_the_metadata() {
+        let recorder = MetadataRecorder::default();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let incoming = tonic::transport::server::TcpIncoming::from(listener);
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(DistTonicServiceServer::new(recorder.clone()))
+                .serve_with_incoming(incoming),
+        );
+
+        let mut client = None;
+        for _ in 0..100 {
+            match DistTonicServiceClient::connect(format!("http://{addr}")).await {
+                Ok(connected) => {
+                    client = Some(connected);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        let mut client = client.expect("the stub server is up");
+
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        let (hop, _) = caller.child();
+        let request = with_traceparent(
+            tonic::Request::new(SendTasksReq::default()),
+            hop.traceparent().as_deref(),
+        )
+        .expect("inject");
+        client.send_tasks(request).await.expect("send");
+
+        let seen = recorder
+            .seen
+            .lock()
+            .await
+            .clone()
+            .expect("the header arrived");
+        let received = TraceContext::from_traceparent(&seen).expect("parse");
+        assert_eq!(received.trace_id_hex(), caller.trace_id_hex());
+        assert_eq!(received.parent_span_id_hex(), hop.parent_span_id_hex());
+    }
+
+    /// A header that does not parse is "no trace", not a failed call: the same
+    /// thing a caller that sends no header gets.
+    #[test]
+    fn a_malformed_header_reads_as_untraced() {
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        metadata.insert(TRACEPARENT_HEADER, "not-a-traceparent".parse().unwrap());
+        assert!(parse_traceparent(&metadata).is_none());
+
+        metadata.insert(TRACEPARENT_HEADER, SAMPLE.parse().unwrap());
+        let parsed = parse_traceparent(&metadata);
+        assert_eq!(parsed.trace_id_hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
+    }
+
+    /// An untraced job sends no header at all rather than an empty one.
+    #[test]
+    fn an_untraced_delivery_sends_no_header() {
+        let request =
+            with_traceparent::<SendTasksReq>(tonic::Request::new(SendTasksReq::default()), None)
+                .expect("inject");
+        assert!(
+            request.metadata().get(TRACEPARENT_HEADER).is_none(),
+            "no header for an untraced job"
+        );
     }
 }

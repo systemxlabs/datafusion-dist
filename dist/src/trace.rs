@@ -26,10 +26,36 @@
 //! asking for `datafusion_dist` at debug level anyway. Job-level spans are
 //! `INFO`, one per job.
 //!
+//! # What a host may rely on
+//!
+//! Span names are part of the interface: a log sink that attributes a line to a
+//! job does it by reading the fields of the spans the line was written under, so
+//! a rename is a silent break of the host's queries. They are exported as the
+//! constants of [`span_name`], and every span carries the same three trace
+//! fields, spelled the same way:
+//!
+//! * `trace_id` — 32 lowercase hex digits, the same on every node and every span
+//!   of one job; empty when the job was not traced.
+//! * `span_id` — 16 lowercase hex digits, unique per span. Empty only when the
+//!   job was not traced.
+//! * `parent_span_id` — the `span_id` of the span this one is a child of; empty
+//!   at the root and for untraced spans.
+//!
+//! They are on the span when it is created, so a subscriber that snapshots span
+//! fields on creation (as datafabric's Loki layer does) needs no `on_record`.
+//!
+//! # What this module does not do
+//!
+//! `tracing` is a hard dependency: the crate logs through `log` and the host may
+//! bridge it, but the spans are created unconditionally, and a disabled span is
+//! cheap rather than free. Make it an optional, default-on feature if a host
+//! ever needs the span creation compiled out; that also needs the spans to be
+//! gated one by one, so it is a separate change.
+//!
 //! [`DistRuntime::submit`]: crate::runtime::DistRuntime::submit
 //! [`DistRuntime::execute_local`]: crate::runtime::DistRuntime::execute_local
 
-use std::fmt;
+use std::{fmt, fmt::Write as _};
 
 use tracing::Span;
 
@@ -38,6 +64,41 @@ use crate::{DistError, DistResult, cluster::NodeId, planner::TaskId};
 /// The header a call carries its trace in, as the W3C Trace Context
 /// recommendation spells it.
 pub const TRACEPARENT_HEADER: &str = "traceparent";
+
+/// The names of the spans this crate opens, as the constants a log query and a
+/// dashboard filter on.
+///
+/// They are here so that a rename is a compile-time change on this side instead
+/// of a silent break on the host's side: datafabric's log sink hardcodes
+/// `dist.job.submit`, and this list is the whole of what it may hardcode.
+pub mod span_name {
+    /// `DistRuntime::submit`, one per job on the node that plans it.
+    pub const JOB_SUBMIT: &str = "dist.job.submit";
+    /// Delivery of a job's tasks to one node. Only opened when the tasks leave
+    /// the node that planned them.
+    pub const JOB_SEND_TASKS: &str = "dist.job.send_tasks";
+    /// A node receiving the tasks of a job.
+    pub const JOB_RECEIVE_TASKS: &str = "dist.job.receive_tasks";
+    /// The execution of one task on the node that runs it.
+    pub const TASK_EXECUTE: &str = "dist.task.execute";
+    /// The fetch of one task's output stream from another node, on the node that
+    /// consumes it. Named apart from [`TASK_EXECUTE`] so that one trace does not
+    /// read as if a task ran twice.
+    pub const TASK_FETCH: &str = "dist.task.fetch";
+    /// The reporting of one job's completion.
+    pub const JOB_COMPLETED: &str = "dist.job.completed";
+    /// The cleanup of one job on the nodes that ran it.
+    pub const JOB_CLEANUP: &str = "dist.job.cleanup";
+    /// The cleanup of a batch of jobs named by an admin RPC.
+    pub const JOB_CLEANUP_BATCH: &str = "dist.job.cleanup_batch";
+    /// The completion check of one job, including the checks that give up on a
+    /// job whose nodes are gone.
+    pub const JOB_CHECK_COMPLETED: &str = "dist.job.check_completed";
+    /// The periodic completion check of a batch of jobs.
+    pub const JOB_CHECK_COMPLETED_BATCH: &str = "dist.job.check_completed_batch";
+    /// The wait for a job's stage0 tasks to be polled.
+    pub const STAGE0_POLL: &str = "dist.stage0.poll";
+}
 
 /// Bit 0 of the flags field: the trace is sampled.
 const SAMPLED: u8 = 0x01;
@@ -118,6 +179,60 @@ impl TraceContext {
             .ok_or_else(|| DistError::internal(format!("Invalid {TRACEPARENT_HEADER}: {header}")))
     }
 
+    /// A context from the ids themselves, for a caller that has them as bytes.
+    ///
+    /// An all-zero id is the recommendation's way of saying "no id", so it
+    /// reads as [`TraceContext::none`] rather than as a context that cannot be
+    /// put on a header.
+    pub fn from_parts(trace_id: [u8; 16], parent_span_id: [u8; 8], flags: u8) -> Self {
+        if trace_id == [0u8; 16] || parent_span_id == [0u8; 8] {
+            return Self::none();
+        }
+        Self {
+            trace_id: Some(trace_id),
+            parent_span_id: Some(parent_span_id),
+            flags,
+        }
+    }
+
+    /// The same trace, with `span_id` as the span this context points at.
+    ///
+    /// [`TraceContext::child`] is for a node that is about to open the span and
+    /// wants the library to name it; this is for a caller that has already
+    /// opened it — a host with a request span of its own — and only needs the
+    /// context to point there instead of at whatever it arrived as.
+    ///
+    /// An untraced context stays untraced: there is no trace to attach a span
+    /// to.
+    pub fn with_parent_span_id(self, span_id: [u8; 8]) -> Self {
+        let Some(trace_id) = self.trace_id else {
+            return Self::none();
+        };
+        if span_id == [0u8; 8] {
+            return Self::none();
+        }
+        Self {
+            trace_id: Some(trace_id),
+            parent_span_id: Some(span_id),
+            flags: self.flags,
+        }
+    }
+
+    /// The trace id as bytes, for a caller that feeds another tracer.
+    pub fn trace_id(&self) -> Option<[u8; 16]> {
+        self.trace_id
+    }
+
+    /// The id of the span this context points at, as bytes.
+    pub fn parent_span_id(&self) -> Option<[u8; 8]> {
+        self.parent_span_id
+    }
+
+    /// The flags byte of the `traceparent`, carried as it arrived.
+    pub fn flags(&self) -> u8 {
+        self.flags
+    }
+
     /// The trace id as it is logged: the empty string when there is no trace, so
     /// that one query always has the same set of fields.
     pub fn trace_id_hex(&self) -> String {
@@ -129,6 +244,12 @@ impl TraceContext {
         self.parent_span_id.map(hex).unwrap_or_default()
     }
 
+    /// Whether the caller asked for the trace to be sampled.
+    ///
+    /// This is passed through, not acted on: the library opens its spans whether
+    /// or not the bit is set, because the decision to skip work belongs to
+    /// whoever pays for the work, not to a flag that arrived with a header. A
+    /// host that wants sampling turns the spans off itself.
     pub fn is_sampled(&self) -> bool {
         self.flags & SAMPLED != 0
     }
@@ -203,9 +324,16 @@ fn new_span_id() -> [u8; 8] {
 }
 
 fn hex<const N: usize>(bytes: [u8; N]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(N * 2);
     for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
+        // Infallible for a `String`, and cheaper than a `format!` per byte.
+        let _ = write!(
+            out,
+            "{}{}",
+            DIGITS[usize::from(byte >> 4)] as char,
+            DIGITS[usize::from(byte & 0x0f)] as char
+        );
     }
     out
 }
@@ -242,7 +370,7 @@ pub(crate) fn span_id_hex(span_id: Option<[u8; 8]>) -> String {
 /// [`DistRuntime::submit`]: crate::runtime::DistRuntime::submit
 pub(crate) fn submit_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
     tracing::info_span!(
-        "dist.job.submit",
+        span_name::JOB_SUBMIT,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -260,7 +388,7 @@ pub(crate) fn send_tasks_span(
     tasks: usize,
 ) -> Span {
     tracing::debug_span!(
-        "dist.job.send_tasks",
+        span_name::JOB_SEND_TASKS,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -278,7 +406,7 @@ pub(crate) fn receive_tasks_span(
     tasks: usize,
 ) -> Span {
     tracing::debug_span!(
-        "dist.job.receive_tasks",
+        span_name::JOB_RECEIVE_TASKS,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -288,8 +416,7 @@ pub(crate) fn receive_tasks_span(
     )
 }
 
-/// The span covering the execution of one task on one node, whether the node is
-/// the local one or one the task is fetched from.
+/// The span covering the execution of one task on the node that runs it.
 pub(crate) fn task_span(
     ctx: &TraceContext,
     span_id: Option<[u8; 8]>,
@@ -297,7 +424,31 @@ pub(crate) fn task_span(
     node_id: &NodeId,
 ) -> Span {
     tracing::debug_span!(
-        "dist.task.execute",
+        span_name::TASK_EXECUTE,
+        trace_id = %ctx.trace_id_hex(),
+        span_id = %span_id_hex(span_id),
+        parent_span_id = %ctx.parent_span_id_hex(),
+        job_id = %task_id.job_id,
+        stage = task_id.stage,
+        partition = task_id.partition,
+        node_id = %node_id,
+    )
+}
+
+/// The span covering the fetch of a task's output from another node, on the node
+/// that consumes it.
+///
+/// Named apart from [`span_name::TASK_EXECUTE`]: the two happen for the same
+/// task, in the same trace, on different nodes, and a shared name would read as
+/// one task executed twice.
+pub(crate) fn task_fetch_span(
+    ctx: &TraceContext,
+    span_id: Option<[u8; 8]>,
+    task_id: &TaskId,
+    node_id: &NodeId,
+) -> Span {
+    tracing::debug_span!(
+        span_name::TASK_FETCH,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -317,7 +468,7 @@ pub(crate) fn job_completed_span(
     job_id: &str,
 ) -> Span {
     tracing::info_span!(
-        "dist.job.completed",
+        span_name::JOB_COMPLETED,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -328,7 +479,19 @@ pub(crate) fn job_completed_span(
 /// The span covering the cleanup of one job on the nodes that ran it.
 pub(crate) fn job_cleanup_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
     tracing::info_span!(
-        "dist.job.cleanup",
+        span_name::JOB_CLEANUP,
+        trace_id = %ctx.trace_id_hex(),
+        span_id = %span_id_hex(span_id),
+        parent_span_id = %ctx.parent_span_id_hex(),
+        job_id = %job_id,
+    )
+}
+
+/// The span covering the check that gave up on one job -- its nodes are gone, or
+/// its task distribution was never seen.
+pub(crate) fn job_check_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job_id: &str) -> Span {
+    tracing::info_span!(
+        span_name::JOB_CHECK_COMPLETED,
         trace_id = %ctx.trace_id_hex(),
         span_id = %span_id_hex(span_id),
         parent_span_id = %ctx.parent_span_id_hex(),
@@ -339,18 +502,18 @@ pub(crate) fn job_cleanup_span(ctx: &TraceContext, span_id: Option<[u8; 8]>, job
 /// The span covering the cleanup of a batch of jobs whose trace the caller has
 /// no context for, e.g. an admin RPC naming job ids.
 pub(crate) fn cleanup_batch_span(jobs: usize) -> Span {
-    tracing::info_span!("dist.job.cleanup", jobs)
+    tracing::info_span!(span_name::JOB_CLEANUP_BATCH, jobs)
 }
 
 /// The span covering the periodic check for jobs that completed everywhere.
 pub(crate) fn check_completed_span(jobs: usize) -> Span {
-    tracing::info_span!("dist.job.check_completed", jobs)
+    tracing::info_span!(span_name::JOB_CHECK_COMPLETED_BATCH, jobs)
 }
 
 /// The span covering the wait for a job's stage0 tasks to be polled, after
 /// which the job is given up on.
 pub(crate) fn stage0_poll_span(jobs: usize) -> Span {
-    tracing::info_span!("dist.stage0.poll", jobs)
+    tracing::info_span!(span_name::STAGE0_POLL, jobs)
 }
 
 #[cfg(test)]
@@ -385,7 +548,7 @@ mod tests {
         span::{Attributes, Id, Record},
     };
 
-    use super::{TRACEPARENT_HEADER, TraceContext};
+    use super::{TRACEPARENT_HEADER, TraceContext, hex};
     use crate::{
         DistError, DistResult, JobId,
         cluster::{DistCluster, NodeId, NodeState},
@@ -393,7 +556,7 @@ mod tests {
         executor::DistExecutor,
         network::{DistNetwork, ScheduledTasks, StageInfo},
         planner::{StageId, TaskId},
-        runtime::DistRuntime,
+        runtime::{DistRuntime, Submit},
     };
 
     const SAMPLE: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
@@ -462,6 +625,54 @@ mod tests {
     }
 
     // ── the context across the hop ────────────────────────────────────────────
+
+    #[test]
+    fn a_context_from_ids_round_trips_and_rejects_zero() {
+        let trace_id = [7u8; 16];
+        let parent = [9u8; 8];
+        let ctx = TraceContext::from_parts(trace_id, parent, 0x01);
+        assert!(!ctx.is_none());
+        assert_eq!(ctx.trace_id(), Some(trace_id));
+        assert_eq!(ctx.parent_span_id(), Some(parent));
+        assert_eq!(ctx.flags(), 0x01);
+        assert!(ctx.is_sampled());
+        assert_eq!(ctx.trace_id_hex(), hex(trace_id));
+        assert_eq!(
+            ctx.traceparent(),
+            Some(format!("00-{}-{}-01", hex(trace_id), hex(parent)))
+        );
+
+        // An all-zero id is the recommendation's "no id".
+        assert!(TraceContext::from_parts([0u8; 16], parent, 0x01).is_none());
+        assert!(TraceContext::from_parts(trace_id, [0u8; 8], 0x01).is_none());
+    }
+
+    #[test]
+    fn a_context_can_point_at_a_span_the_caller_opened() {
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        let mine = [3u8; 8];
+        let ctx = caller.with_parent_span_id(mine);
+        assert_eq!(ctx.trace_id(), caller.trace_id());
+        assert_eq!(ctx.parent_span_id(), Some(mine));
+        assert_eq!(ctx.flags(), caller.flags());
+        assert_eq!(
+            ctx.traceparent(),
+            Some(format!("00-{}-{}-01", caller.trace_id_hex(), hex(mine)))
+        );
+
+        // Attaching a span to no trace stays no trace, and a zero span is no id.
+        assert!(TraceContext::none().with_parent_span_id(mine).is_none());
+        assert!(caller.with_parent_span_id([0u8; 8]).is_none());
+    }
+
+    #[test]
+    fn an_untraced_context_has_no_bytes_and_no_flags() {
+        let ctx = TraceContext::none();
+        assert_eq!(ctx.trace_id(), None);
+        assert_eq!(ctx.parent_span_id(), None);
+        assert_eq!(ctx.flags(), 0);
+        assert!(!ctx.is_sampled());
+    }
 
     /// Runs the tasks of a stage and logs from inside the poll, which is where a
     /// plan reads its batches and where dist's own executor lines are written.
@@ -807,6 +1018,78 @@ mod tests {
             .find(|span| span.id == probe.span)
             .expect("the event is attributed to a span");
         assert_eq!(probe_span.name, "dist.task.execute");
+    }
+
+    /// The trace of a job is readable from the runtime afterwards, which is what
+    /// a host needs to keep its own context in step with the job's.
+    #[tokio::test]
+    async fn the_runtime_hands_the_trace_back() {
+        let recorder = Arc::new(Recorder::default());
+        let _guard = tracing::subscriber::set_default(Recording(recorder));
+
+        let node = NodeId {
+            host: "127.0.0.1".to_string(),
+            port: 50050,
+        };
+        let ctx = SessionContext::new();
+        let runtime = DistRuntime::new(
+            ctx.task_ctx(),
+            Arc::new(DistConfig::default()),
+            Arc::new(SingleNodeCluster { node: node.clone() }),
+            Arc::new(UnreachableNetwork { node: node.clone() }),
+        )
+        .with_executor(Arc::new(CurrentRuntime {
+            handle: Handle::current(),
+        }));
+
+        let schema: SchemaRef = Arc::new(Schema::new(vec![ArrowField::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProbeExec {
+            schema: schema.clone(),
+            properties: EmptyExec::new(schema).properties().clone(),
+        });
+
+        let job_id: JobId = "test-job".into();
+        let caller = TraceContext::from_traceparent(SAMPLE).expect("valid");
+        let stage0 = runtime
+            .submit(job_id.clone(), plan, Arc::new(HashMap::new()))
+            .with_trace_context(caller)
+            .await
+            .expect("submit");
+
+        let (task_id, _) = stage0.iter().next().expect("one stage0 task");
+        let trace = runtime.trace_of(task_id).expect("the task's stage is here");
+        assert_eq!(trace.trace_id(), caller.trace_id());
+        // The stage continues the span this node opened when the tasks arrived,
+        // not the caller's: the hop across nodes is one more hop.
+        assert!(trace.parent_span_id().is_some());
+        assert_ne!(trace.parent_span_id(), caller.parent_span_id());
+
+        let job_trace = runtime.job_trace_of(&job_id).expect("the job is here");
+        assert_eq!(job_trace.trace_id(), caller.trace_id());
+
+        // A job this node never saw has no trace, rather than an empty one.
+        assert!(runtime.job_trace_of(&"elsewhere".into()).is_none());
+        let elsewhere = TaskId {
+            job_id: "elsewhere".into(),
+            stage: 0,
+            partition: 0,
+        };
+        assert!(runtime.trace_of(&elsewhere).is_none());
+    }
+
+    /// `submit` used to be an `async fn`, so callers spawned and joined it. The
+    /// value that replaced it has to stay a `Future`, not only an `IntoFuture`.
+    #[test]
+    fn a_submit_value_is_a_send_future() {
+        fn assert_send_future<F: std::future::Future + Send>(_: F) {}
+        fn check(submit: Submit<'_>) {
+            assert_send_future(submit)
+        }
+        let _ = check;
     }
 
     /// The metadata header the transport sends carries the trace, so a node that

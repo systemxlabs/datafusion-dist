@@ -49,6 +49,27 @@ fn retry_strategy() -> ExponentialBuilder {
         .with_jitter()
 }
 
+/// The request, carrying the trace of the hop that sends it.
+///
+/// `traceparent` is the value a receiver is meant to read as its parent span; it
+/// is `None` for an untraced job, and then no header is sent at all rather than
+/// an empty one.
+pub(crate) fn with_traceparent<T>(
+    mut request: tonic::Request<T>,
+    traceparent: Option<&str>,
+) -> DistResult<tonic::Request<T>> {
+    let Some(traceparent) = traceparent else {
+        return Ok(request);
+    };
+    let value = traceparent
+        .parse()
+        .map_err(|e| DistError::internal(format!("Invalid traceparent: {e}")))?;
+    request
+        .metadata_mut()
+        .insert(datafusion_dist::trace::TRACEPARENT_HEADER, value);
+    Ok(request)
+}
+
 #[derive(Debug)]
 pub struct DistTonicNetwork {
     pub port: u16,
@@ -180,23 +201,20 @@ impl DistNetwork for DistTonicNetwork {
 
     async fn send_tasks(&self, node_id: NodeId, scheduled_tasks: ScheduledTasks) -> DistResult<()> {
         // The trace of this delivery goes in the metadata, not in the message:
-        // it describes the hop, and it changes per attempt — a retried call
-        // announces a new span of the same trace rather than replaying the
-        // span id of an attempt that never arrived.
+        // it names the hop, and the message is the work. It is derived once for
+        // the delivery rather than per attempt, because the span it points at —
+        // `dist.job.send_tasks` on this node — is also opened once: a retry of
+        // the same delivery is a second call of the same hop, and announcing a
+        // fresh id per attempt would name a span that nothing writes.
         let traceparent = scheduled_tasks.trace.traceparent();
         let send_tasks_req = self.serialize_scheduled_tasks(scheduled_tasks)?;
 
         (|| async {
             let mut tonic_client = self.build_tonic_client(&node_id).await?;
-            let mut request = tonic::Request::new(send_tasks_req.clone());
-            if let Some(traceparent) = &traceparent {
-                request.metadata_mut().insert(
-                    datafusion_dist::trace::TRACEPARENT_HEADER,
-                    traceparent
-                        .parse()
-                        .map_err(|e| DistError::internal(format!("Invalid traceparent: {e}")))?,
-                );
-            }
+            let request = with_traceparent(
+                tonic::Request::new(send_tasks_req.clone()),
+                traceparent.as_deref(),
+            )?;
             tonic_client
                 .send_tasks(request)
                 .await

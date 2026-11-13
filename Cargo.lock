@@ -1555,6 +1555,7 @@ dependencies = [
  "datafusion-proto",
  "futures",
  "prost",
+ "tokio",
  "tonic",
  "tonic-prost",
  "uuid",
